@@ -1162,12 +1162,18 @@ CV__DNN_INLINE_NS_BEGIN
     };
     
     class CV_EXPORTS BatchNorm2Layer : public Layer
-{
-public:
-    static Ptr<BatchNorm2Layer> create(const LayerParams& params);
-};
+    {
+    public:
+        static Ptr<BatchNorm2Layer> create(const LayerParams& params);
+        float epsilon;
+        bool useGlobalStats;
+        bool hasWeights;
+        bool hasBias;
+        bool dynamicInputs;
 
-    
+        Mat weights_, bias_;
+    };
+ 
     class CV_EXPORTS BatchNormLayerInt8 : public BatchNormLayer
     {
     public:

@@ -1342,10 +1342,9 @@ void ONNXImporter2::parseBatchNormalization(LayerParams& layerParams, const open
         layerParams.blobs[1] = net.argTensor(node_inputs[4]); // var
         layerParams.blobs[2] = net.argTensor(node_inputs[1]); // scale
         layerParams.blobs[3] = net.argTensor(node_inputs[2]); // bias
-        addLayer(layerParams, node_proto, 1); 
-    } else {
-        addLayer(layerParams, node_proto);
     }
+    
+    addLayer(layerParams, node_proto);
 }
 
 void ONNXImporter2::parseGemm(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)

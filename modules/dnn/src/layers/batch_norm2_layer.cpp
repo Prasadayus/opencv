@@ -5,20 +5,11 @@
 #include "../precomp.hpp"
 #include "layers_common.hpp"
 
-
 namespace cv {
 namespace dnn {
 
 class BatchNorm2LayerImpl CV_FINAL : public BatchNorm2Layer {
 public:
-    float epsilon;
-    bool useGlobalStats;
-    bool hasWeights;
-    bool hasBias;
-    bool dynamicInputs;  
-
-    Mat weights_, bias_;
-
     BatchNorm2LayerImpl(const LayerParams& params) {
         setParamsFrom(params);
       
