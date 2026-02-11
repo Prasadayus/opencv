@@ -1160,7 +1160,14 @@ CV__DNN_INLINE_NS_BEGIN
 
         static Ptr<BatchNormLayer> create(const LayerParams &params);
     };
+    
+    class CV_EXPORTS BatchNorm2Layer : public Layer
+{
+public:
+    static Ptr<BatchNorm2Layer> create(const LayerParams& params);
+};
 
+    
     class CV_EXPORTS BatchNormLayerInt8 : public BatchNormLayer
     {
     public:

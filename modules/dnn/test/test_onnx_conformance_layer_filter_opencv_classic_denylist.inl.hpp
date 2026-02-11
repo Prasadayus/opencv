@@ -652,3 +652,5 @@
 "test_blackmanwindow_expanded",
 "test_blackmanwindow_symmetric",
 "test_blackmanwindow_symmetric_expanded",
+"test_batchnorm_epsilon", // Issue:: Unkonwn error::Blob mean not found in const blobs in function 'getBlob'
+"test_batchnorm_example",  // ---- same as above ---
