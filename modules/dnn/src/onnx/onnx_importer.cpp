@@ -4157,6 +4157,24 @@ Mat readTensorFromONNX(const String& path)
         CV_Error(Error::StsUnsupportedFormat, cv::format("Failed to parse ONNX data: %s", path.c_str()));
     }
     Mat mat = getMatFromTensor(tensor_proto, false);
+    int dims = (int)tensor_proto.dims_size();
+    if (dims > 0 && mat.total() == 0) {
+        int onnx_type = tensor_proto.data_type();
+        int cv_type = CV_32F;
+        if (onnx_type == opencv_onnx::TensorProto_DataType_FLOAT) cv_type = CV_32F;
+        else if (onnx_type == opencv_onnx::TensorProto_DataType_DOUBLE) cv_type = CV_64F;
+        else if (onnx_type == opencv_onnx::TensorProto_DataType_INT32) cv_type = CV_32S;
+        else if (onnx_type == opencv_onnx::TensorProto_DataType_INT64) cv_type = CV_32S;
+        else if (onnx_type == opencv_onnx::TensorProto_DataType_UINT8) cv_type = CV_8U;
+        else if (onnx_type == opencv_onnx::TensorProto_DataType_INT8) cv_type = CV_8S;
+        else if (onnx_type == opencv_onnx::TensorProto_DataType_BOOL) cv_type = CV_8U;
+        else if (onnx_type == opencv_onnx::TensorProto_DataType_FLOAT16) cv_type = CV_16F;
+        else if (onnx_type == opencv_onnx::TensorProto_DataType_BFLOAT16) cv_type = CV_16BF;
+
+        std::vector<int> sizes(dims);
+        for (int i = 0; i < dims; ++i) sizes[i] = (int)tensor_proto.dims(i);
+        mat.create(dims, sizes.data(), cv_type);
+    }
     releaseONNXTensor(tensor_proto);
     return mat;
 }

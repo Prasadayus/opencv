@@ -224,6 +224,7 @@ public:
         {
             const Mat &src = inputs[i];
             Mat &dst = outputs[i];
+            if (src.empty()) continue;
             CV_Assert_N(src.size == dst.size, src.isContinuous(), dst.isContinuous());
 
             if (src.type() == CV_32F && dst.type() == CV_32F)

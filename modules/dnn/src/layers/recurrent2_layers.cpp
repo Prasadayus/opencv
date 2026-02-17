@@ -174,13 +174,12 @@ class LSTM2LayerImpl CV_FINAL : public LSTM2Layer
                 outputs.push_back(newShape);
             }
 
-            // internal shapes need during forward pass
             internals.assign(1, shape(_batchSize, _hidSize)); // hInternal
             internals.push_back(shape(_batchSize, _hidSize)); // cInternal
             internals.push_back(shape(_batchSize, 1)); // dummyOnes
             internals.push_back(shape(_batchSize, 4*_hidSize)); // gates
 
-            return false;
+            return true;
         }
 
         void getTypes(const std::vector<MatType>& inputs,
@@ -243,22 +242,22 @@ class LSTM2LayerImpl CV_FINAL : public LSTM2Layer
                     break;
                 case 4:
                     // X, W, R, B are given
-                    blobs_.push_back(input[3]);
+                    blobs_.push_back(!input[3].empty() ? input[3] : Mat::zeros(2, biasShape, input[0].type()));
                     // create h0, c0
                     blobs_.push_back(Mat::zeros(3, hidShape, input[0].type()));
                     blobs_.push_back(Mat::zeros(3, hidShape, input[0].type()));
                     break;
                 case 7:
                     // X, W, R, B, h0, c0 are given
-                    blobs_.push_back(input[3]);
-                    blobs_.push_back(input[5]);
-                    blobs_.push_back(input[6]);
+                    blobs_.push_back(!input[3].empty() ? input[3] : Mat::zeros(2, biasShape, input[0].type()));
+                    blobs_.push_back(!input[5].empty() ? input[5] : Mat::zeros(3, hidShape, input[0].type()));
+                    blobs_.push_back(!input[6].empty() ? input[6] : Mat::zeros(3, hidShape, input[0].type()));
                     break;
                 case 8:
                     // X, W, R, B, seqlen, h0, c0, P are given
-                    blobs_.push_back(input[3]);
-                    blobs_.push_back(input[5]);
-                    blobs_.push_back(input[6]);
+                    blobs_.push_back(!input[3].empty() ? input[3] : Mat::zeros(2, biasShape, input[0].type()));
+                    blobs_.push_back(!input[5].empty() ? input[5] : Mat::zeros(3, hidShape, input[0].type()));
+                    blobs_.push_back(!input[6].empty() ? input[6] : Mat::zeros(3, hidShape, input[0].type()));
                     blobs_.push_back(input[7]);
                     break;
                 default:
@@ -282,6 +281,7 @@ class LSTM2LayerImpl CV_FINAL : public LSTM2Layer
                 dummyOnes = internals[2],
                 gates = internals[3];
 
+            bool _usePeephole = usePeephole && blobs_.size() > 5 && !blobs_[5].empty();
 
             Mat cOutTs;
             Mat cOut = produceCellOutput ? output[0].clone() : Mat();
@@ -304,7 +304,7 @@ class LSTM2LayerImpl CV_FINAL : public LSTM2Layer
                 h_0 = blobs_[3].rowRange(i * blobs_[3].rows / numDirs, (i + 1) * blobs_[3].rows / numDirs);
                 c_0 = blobs_[4].rowRange(i * blobs_[4].rows / numDirs, (i + 1) * blobs_[4].rows / numDirs);
 
-                if (usePeephole)
+                if (_usePeephole)
                 {
                     // slice required weights for each direction
                     pI = blobs_[5].rowRange(i * blobs_[5].rows / numDirs, (i + 1) * blobs_[5].rows / numDirs);
@@ -354,7 +354,7 @@ class LSTM2LayerImpl CV_FINAL : public LSTM2Layer
                         add(gateF, forgetBias, gateF);
                     }
 
-                    if (usePeephole)
+                    if (_usePeephole)
                     {
                         Mat gatesIF = gates.colRange(0, 2*hidSize);
                         gemm(cInternal, pI, 1, gateI, 1, gateI);
@@ -380,7 +380,7 @@ class LSTM2LayerImpl CV_FINAL : public LSTM2Layer
                         max(cInternal, -cellClip, cInternal);
                     }
 
-                    if (usePeephole)
+                    if (_usePeephole)
                     {
                         gemm(cInternal, pO, 1, gateO, 1, gateO);
                         f_activation(gateO, gateO);
@@ -535,11 +535,13 @@ class LSTM2LayerImpl CV_FINAL : public LSTM2Layer
             // Resahpe if only they are given
             if (!blobs[3].empty()){
                 h0 = blobs[3];
-                h0 = h0.reshape(1, h0.size[0] * h0.size[1]);
+                if (h0.dims > 0)
+                    h0 = h0.reshape(1, h0.size[0] * h0.size[1]);
             }
             if (!blobs[4].empty()){
                 c0 = blobs[4];
-                c0 = c0.reshape(1, c0.size[0] * c0.size[1]);
+                if (c0.dims > 0)
+                    c0 = c0.reshape(1, c0.size[0] * c0.size[1]);
             }
 
             b = b.reshape(1, b.size[0]);
@@ -577,7 +579,7 @@ class LSTM2LayerImpl CV_FINAL : public LSTM2Layer
                 blobs[4] = c0;
             }
 
-            if (blobs.size() == 5) {
+            if (blobs.size() <= 5 || blobs[5].empty()) {
                 return;
             }
 

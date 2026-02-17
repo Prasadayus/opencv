@@ -79,7 +79,7 @@ void normAssert(
         cv::InputArray ref, cv::InputArray test, const char *comment /*= ""*/,
         double l1 /*= 0.00001*/, double lInf /*= 0.0001*/)
 {
-    double normL1 = cvtest::norm(ref, test, cv::NORM_L1) / ref.getMat().total();
+    double normL1 = cvtest::norm(ref, test, cv::NORM_L1) / std::max((size_t)1, ref.getMat().total());
     EXPECT_LE(normL1, l1) << comment << "  |ref| = " << cvtest::norm(ref, cv::NORM_INF);
 
     double normInf = cvtest::norm(ref, test, cv::NORM_INF);

@@ -342,10 +342,16 @@ void Net::Impl::allocateLayerOutputs(
         Arg out = layer->outputs[i];
         if (useBufferPool) {
             Mat& out_t = argTensor(out);
-            out_t.fit(outShapes[i], outTypes[i]);
+            if (outShapes[i].empty())
+                out_t.create(outShapes[i].dims, outShapes[i].p, outTypes[i]);
+            else
+                out_t.fit(outShapes[i], outTypes[i]);
             outputs[i] = out_t;
         } else {
-            outputs[i].fit(outShapes[i], outTypes[i]);
+            if (outShapes[i].empty())
+                outputs[i].create(outShapes[i].dims, outShapes[i].p, outTypes[i]);
+            else
+                outputs[i].fit(outShapes[i], outTypes[i]);
         }
         outOrigData[i].first = outputs[i].u ? outputs[i].u->data : nullptr;
         outOrigData[i].second = outputs[i].u ? outputs[i].u->size : 0;
@@ -578,6 +584,7 @@ void Net::Impl::setGraphInput(Ptr<Graph>& graph, size_t idx, const Mat& m)
         Mat& inp_t = argTensor(inp);
         if (inp_t.shape() != mshape || inp_t.type() != adata_type)
             finalizeLayers = true;
+        
         inp_t.fit(mshape, adata_type);
 
         if (adata.type == CV_16BF && mtype == CV_16U)
@@ -589,6 +596,10 @@ void Net::Impl::setGraphInput(Ptr<Graph>& graph, size_t idx, const Mat& m)
         {
             Mat tmp(mshape, CV_16F, (void*)m.data);
             tmp.convertTo(inp_t, adata_type);
+        }
+        else if (m.empty())
+        {
+            // Empty tensor detected, bypassing convertTo.
         }
         else
         {

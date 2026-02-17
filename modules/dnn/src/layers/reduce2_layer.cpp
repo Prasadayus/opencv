@@ -98,11 +98,7 @@ public:
         CV_Assert(!inps.empty());
         outs.resize(1);
         const MatShape& inp0 = inps[0];
-        if (inp0.empty()) {
-            outs[0] = MatShape();
-            return false;
-        }
-
+        
         std::vector<int> axes;
         if (!this->axes.empty()) {
             axes = this->axes;
@@ -114,46 +110,38 @@ public:
             }
         }
 
+        MatShape outShape;
         if (axes.empty()) {
             if (noop_with_empty_axes) {
-                outs[0] = inp0;
+                outShape = inp0;
             } else {
                 if (keepdims) {
-                    MatShape shape_out(inp0.size(), 1);
-                    outs[0] = shape_out;
+                    outShape.assign(inp0.size(), 1);
                 } else {
-                    outs[0] = MatShape();
-                    printf("DNN/Reduce2: getMemoryShapes (total) -> Scalar (rank-0)\n");
+                    outShape = MatShape{1};
                 }
             }
-            // --- INSERT HACK HERE ---
-        if (outs[0].empty() && !keepdims) {
-            if (name.find("loss") != std::string::npos || name.find("Loss") != std::string::npos) {
-                outs[0] = MatShape(1, 1); // Prove NLLLoss needs Rank-2
-            } else {
-                outs[0] = MatShape();     // Stay Rank-0 for ONNX tests
+        } else {
+            std::vector<int> norm_axes = axes;
+            for (size_t i = 0; i < norm_axes.size(); ++i)
+                norm_axes[i] = normalize_axis(norm_axes[i], (int)inp0.size());
+
+            MatShape tmp = inp0;
+            for (int axis : norm_axes) tmp[axis] = -1;
+            
+            for (size_t i = 0; i < tmp.size(); ++i) {
+                if (tmp[i] == -1) {
+                    if (keepdims) outShape.push_back(1);
+                } else {
+                    outShape.push_back(tmp[i]);
+                }
+            }
+            if (outShape.size() == 0) {
+                outShape = MatShape{1};
             }
         }
-        // ------------------------
-            return false;
-        }
-
-        std::vector<int> norm_axes = axes;
-        for (size_t i = 0; i < norm_axes.size(); ++i)
-            norm_axes[i] = normalize_axis(norm_axes[i], (int)inp0.size());
-
-        auto shape_output_ = inp0;
-        for (int axis : norm_axes) shape_output_[axis] = -1;
-        MatShape shape_output;
-        for (size_t i = 0; i < shape_output_.size(); ++i) {
-            if (shape_output_[i] == -1) {
-                if (keepdims) shape_output.push_back(1);
-            } else {
-                shape_output.push_back(shape_output_[i]);
-            }
-        }
-        outs[0] = shape_output;
-        return false;
+        outs[0] = outShape;
+        return true;
     }
 
     virtual bool supportBackend(int backendId) CV_OVERRIDE {
@@ -167,7 +155,21 @@ public:
         std::vector<MatType>& internals) const CV_OVERRIDE
     {
         CV_CheckType(inputs[0], inputs[0] == CV_32F || inputs[0] == CV_64F || inputs[0] == CV_32S || inputs[0] == CV_64S || inputs[0] == CV_16F || inputs[0] == CV_16BF || inputs[0] == CV_8U || inputs[0] == CV_8S || inputs[0] == CV_Bool, "");
-        outputs.assign(1, inputs[0]);
+        
+        bool isInt = (inputs[0] == CV_32S || inputs[0] == CV_64S || inputs[0] == CV_8U || inputs[0] == CV_8S || inputs[0] == CV_Bool);
+        if (isInt && (reduce_type == ReduceType::MEAN || 
+                      reduce_type == ReduceType::L1 || 
+                      reduce_type == ReduceType::L2 || 
+                      reduce_type == ReduceType::LOG_SUM || 
+                      reduce_type == ReduceType::LOG_SUM_EXP || 
+                      reduce_type == ReduceType::SUM_SQUARE))
+        {
+            outputs.assign(1, CV_32F);
+        }
+        else
+        {
+            outputs.assign(1, inputs[0]);
+        }
     }
 
     template <typename T, typename WT, typename AccT>
@@ -413,6 +415,12 @@ public:
         static void run(const Mat& src, Mat& dst, std::vector<int> axes, bool noop_with_empty_axes) {
             CV_Assert(src.isContinuous());
             CV_Assert(dst.isContinuous());
+            
+            if (src.total() == 0) {
+                dst.setTo(Scalar(static_cast<double>(Op::identity())));
+                return;
+            }
+            
             if (shape(src).empty() || (shape(src).size() == 1)){
                 ReduceAllInvoker<Op> p(src, dst);
                 p(Range(0, p.total));
@@ -484,13 +492,13 @@ public:
             axes = this->axes;
         } else if (inputs.size() >= 2) {
             Mat axesMat = inputs[1];
-            if (axesMat.type() != CV_32S) {
-                axesMat.convertTo(axesMat, CV_32S);
-            }
             tensorToIntVec(axesMat, axes);
         }
 
-        MatShape inpShape = shape(src);
+        MatShape inpShape;
+        for (int i = 0; i < src.dims; ++i) {
+            inpShape.push_back(src.size[i]);
+        }
         MatShape outShape;
         if (axes.empty()) {
             if (noop_with_empty_axes) {
@@ -499,8 +507,7 @@ public:
                 if (keepdims) {
                     outShape.assign(inpShape.size(), 1);
                 } else {
-                    outShape = MatShape();
-                    printf("DNN/Reduce2: forward (total) allocation -> Scalar (rank-0)\n");
+                    outShape = MatShape{1};
                 }
             }
         } else {
@@ -519,29 +526,9 @@ public:
             axes = norm_axes;
         }
 
-        // --- INSERT HACK HERE ---
-        if (outShape.empty() && !keepdims) {
-            if (name.find("loss") != std::string::npos || name.find("Loss") != std::string::npos) {
-                outShape = MatShape(1, 1); // Force Rank-2 for NLLLoss path
-            } else {
-                outShape = MatShape();     // Stay Rank-0 for Reduce tests
-            }
+        if (outShape.size() == 0) {
+            outShape = MatShape{1};
         }
-        // -----------------------
-
-        // --- ADD DEBUG CODE HERE ---
-        std::cout << "[DEBUG-REDUCE] Layer: " << name 
-                  << " | Op: " << reduceTypeToString(reduce_type)
-                  << " | outShape Rank: " << outShape.size() << std::endl;
-        
-        if (outShape.empty()) {
-            std::cout << "[DEBUG-REDUCE] !!! Detected RANK-0 (Scalar) Output !!!" << std::endl;
-        } else {
-            std::cout << "[DEBUG-REDUCE] outShape: [";
-            for(size_t i=0; i<outShape.size(); ++i) std::cout << outShape[i] << (i==outShape.size()-1 ? "" : ", ");
-            std::cout << "]" << std::endl;
-        }
-        // ---------------------------
 
         auto kind = outputs_arr.kind();
         if (kind == _InputArray::STD_VECTOR_MAT) {
@@ -553,7 +540,16 @@ public:
         outputs_arr.getMatVector(outputs);
         Mat& dst = outputs[0];
 
-        typeDispatch(dst.type(), src, dst, axes, noop_with_empty_axes);
+        if (src.type() != dst.type())
+        {
+            Mat tmp;
+            src.convertTo(tmp, dst.type());
+            typeDispatch(dst.type(), tmp, dst, axes, noop_with_empty_axes);
+        }
+        else
+        {
+            typeDispatch(dst.type(), src, dst, axes, noop_with_empty_axes);
+        }
     }
 
     virtual std::ostream& dumpAttrs(std::ostream& strm, int indent) const CV_OVERRIDE
@@ -577,30 +573,19 @@ public:
         return strm;
     }
 
-    template <typename Op, typename... Args>
-    static void opDispatch_with_identity(Args&&... args) {
-        Mat& src = std::get<0>(std::forward_as_tuple(args...));
-        Mat& dst = std::get<1>(std::forward_as_tuple(args...));
-        if (src.total() == 0) {
-            dst.setTo(Scalar(static_cast<double>(Op::identity())));
-            return;
-        }
-        ReduceInvoker<Op>::run(std::forward<Args>(args)...);
-    }
-
     template <typename T, typename WT, typename AccT, typename... Args>
     inline void opDispatch(Args&&... args) {
         switch (reduce_type) {
-            case ReduceType::MAX:         opDispatch_with_identity<ReduceMax<T, WT, WT>>(std::forward<Args>(args)...);         break;
-            case ReduceType::MIN:         opDispatch_with_identity<ReduceMin<T, WT, WT>>(std::forward<Args>(args)...);         break;
-            case ReduceType::MEAN:        opDispatch_with_identity<ReduceMean<T, WT, AccT>>(std::forward<Args>(args)...);      break;
-            case ReduceType::SUM:         opDispatch_with_identity<ReduceSum<T, WT, AccT>>(std::forward<Args>(args)...);       break;
-            case ReduceType::L1:          opDispatch_with_identity<ReduceL1<T, WT, AccT>>(std::forward<Args>(args)...);        break;
-            case ReduceType::L2:          opDispatch_with_identity<ReduceL2<T, WT, AccT>>(std::forward<Args>(args)...);        break;
-            case ReduceType::PROD:        opDispatch_with_identity<ReduceProd<T, WT, WT>>(std::forward<Args>(args)...);        break;
-            case ReduceType::SUM_SQUARE:  opDispatch_with_identity<ReduceSumSquare<T, WT, AccT>>(std::forward<Args>(args)...); break;
-            case ReduceType::LOG_SUM:     opDispatch_with_identity<ReduceLogSum<T, WT, AccT>>(std::forward<Args>(args)...);    break;
-            case ReduceType::LOG_SUM_EXP: opDispatch_with_identity<ReduceLogSumExp<T, WT, AccT>>(std::forward<Args>(args)...); break;
+            case ReduceType::MAX:         ReduceInvoker<ReduceMax<T, WT, WT>>::run(std::forward<Args>(args)...);         break;
+            case ReduceType::MIN:         ReduceInvoker<ReduceMin<T, WT, WT>>::run(std::forward<Args>(args)...);         break;
+            case ReduceType::MEAN:        ReduceInvoker<ReduceMean<T, WT, AccT>>::run(std::forward<Args>(args)...);      break;
+            case ReduceType::SUM:         ReduceInvoker<ReduceSum<T, WT, AccT>>::run(std::forward<Args>(args)...);       break;
+            case ReduceType::L1:          ReduceInvoker<ReduceL1<T, WT, AccT>>::run(std::forward<Args>(args)...);        break;
+            case ReduceType::L2:          ReduceInvoker<ReduceL2<T, WT, AccT>>::run(std::forward<Args>(args)...);        break;
+            case ReduceType::PROD:        ReduceInvoker<ReduceProd<T, WT, WT>>::run(std::forward<Args>(args)...);        break;
+            case ReduceType::SUM_SQUARE:  ReduceInvoker<ReduceSumSquare<T, WT, AccT>>::run(std::forward<Args>(args)...); break;
+            case ReduceType::LOG_SUM:     ReduceInvoker<ReduceLogSum<T, WT, AccT>>::run(std::forward<Args>(args)...);    break;
+            case ReduceType::LOG_SUM_EXP: ReduceInvoker<ReduceLogSumExp<T, WT, AccT>>::run(std::forward<Args>(args)...); break;
             default: CV_Error(Error::StsBadArg, "DNN/Reduce: Unsupported operation.");
         }
     }

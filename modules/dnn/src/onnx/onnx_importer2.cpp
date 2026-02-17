@@ -108,7 +108,15 @@ static std::string dataType2str(int dt)
 static Mat getMatFromTensor2(const opencv_onnx::TensorProto& tensor_proto, const std::string base_path="")
 {
     Mat m = getMatFromTensor(tensor_proto, false, base_path);
-    m.size.dims = m.dims = (int)tensor_proto.dims_size();
+    int dims = (int)tensor_proto.dims_size();
+    if (m.total() == 0 && dims > 0) {
+        m.size.dims = m.dims = dims;
+        for (int i = 0; i < dims; ++i) {
+            m.size[i] = (int)tensor_proto.dims(i);
+        }
+    } else {
+        m.size.dims = m.dims = dims;
+    }
     return m;
 }
 
@@ -1181,8 +1189,6 @@ void ONNXImporter2::parseLSTM(LayerParams& layerParams, const opencv_onnx::NodeP
     layerParams.set("reverse", layerParams.get<String>("direction", "") == "reverse");
     layerParams.set("bidirectional", layerParams.get<String>("direction", "") == "bidirectional");
 
-
-
     bool need_yc = lstm_proto.output_size() > 2 && !lstm_proto.output(2).empty();
     bool need_yh = lstm_proto.output_size() > 1 && !lstm_proto.output(1).empty();
     bool need_y  = lstm_proto.output_size() > 0 && !lstm_proto.output(0).empty();
@@ -1194,11 +1200,8 @@ void ONNXImporter2::parseLSTM(LayerParams& layerParams, const opencv_onnx::NodeP
     layerParams.set("produce_cell_output", need_yc);
     layerParams.set("produce_output_yh", need_yh);
 
-
-    if (lstm_proto.input_size() == 8)
+    if (lstm_proto.input_size() == 8 && !lstm_proto.input(7).empty())
         layerParams.set("use_peephole", true);
-
-
     addLayer(layerParams, lstm_proto);
 }
 
@@ -1325,28 +1328,34 @@ void ONNXImporter2::parseBatchNormalization(LayerParams& layerParams, const open
     if (node_proto.input_size() != 5)
         CV_Error(Error::StsNotImplemented, "Expected input, scale, bias, mean and var");
 
-    layerParams.type = "BatchNorm2";
-    
-    float eps = 1e-5f;
-    for (int i = 0; i < node_proto.attribute_size(); i++) {
-        const opencv_onnx::AttributeProto& attr = node_proto.attribute(i);
-        if (attr.name() == "epsilon") eps = attr.f();
-    }
-    layerParams.set("epsilon", eps);
+    layerParams.type = "BatchNorm";
+    replaceLayerParam(layerParams, "epsilon", "eps");
+    replaceLayerParam(layerParams, "spatial", "use_global_stats");
 
-    bool isStatic = net.isConstArg(node_inputs[1]) && // scale
-                    net.isConstArg(node_inputs[2]) && // bias
-                    net.isConstArg(node_inputs[3]) && // mean
-                    net.isConstArg(node_inputs[4]);   // var
+    CV_Assert(net.isConstArg(node_inputs[3]));
+    CV_Assert(net.isConstArg(node_inputs[4]));
 
-    if (isStatic) {
-        layerParams.blobs.resize(4);
-        layerParams.blobs[0] = net.argTensor(node_inputs[3]); // mean
-        layerParams.blobs[1] = net.argTensor(node_inputs[4]); // var
-        layerParams.blobs[2] = net.argTensor(node_inputs[1]); // scale
-        layerParams.blobs[3] = net.argTensor(node_inputs[2]); // bias
+    Mat meanData = net.argTensor(node_inputs[3]);
+    Mat stdData =  net.argTensor(node_inputs[4]);
+
+    layerParams.blobs.push_back(meanData);
+    layerParams.blobs.push_back(stdData);
+
+    if (!node_proto.input(1).empty()) {
+        layerParams.set("has_weight", true);
+        CV_Assert(net.isConstArg(node_inputs[1]));
+        layerParams.blobs.push_back(net.argTensor(node_inputs[1]));  // weightData
+    } else {
+        layerParams.set("has_weight", false);
     }
-    
+
+    if (!node_proto.input(2).empty()) {
+        layerParams.set("has_bias", true);
+        CV_Assert(net.isConstArg(node_inputs[2]));
+        layerParams.blobs.push_back(net.argTensor(node_inputs[2]));  // biasData
+    } else {
+        layerParams.set("has_bias", false);
+    }
     addLayer(layerParams, node_proto);
 }
 

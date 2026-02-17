@@ -23,6 +23,7 @@ namespace
 {
     inline void castQuantized(const Mat& src, Mat& dst, int targetDepth)
     {
+        if (src.empty()) return;
         if (targetDepth == CV_16F)
         {
             CV_Assert(dst.depth() == CV_32F);
@@ -47,7 +48,9 @@ namespace
             }
             else
             {
-                Mat src32; src.convertTo(src32, CV_32F);
+                Mat src32;
+                src32.create(src.dims, src.size.p, CV_32F);
+                src.convertTo(src32, CV_32F);
                 MatConstIterator_<float> sIt = src32.begin<float>(), sEnd = src32.end<float>();
                 MatIterator_<float> dIt = dst.begin<float>();
                 for (; sIt != sEnd; ++sIt, ++dIt)
@@ -66,7 +69,7 @@ namespace
                 CV_Error(Error::StsNotImplemented, "Unsupported destination depth for BF16 cast");
             }
 
-            Mat dst_bits(dst.size(), CV_MAKETYPE(CV_16U, dst.channels()), dst.data, dst.step);
+            Mat dst_bits(dst.dims, dst.size.p, CV_MAKETYPE(CV_16U, dst.channels()), dst.data, dst.step.p);
 
             const Mat* src32p;
             Mat src32;
@@ -74,6 +77,7 @@ namespace
                 src32p = &src;
             else
             {
+                src32.create(src.dims, src.size.p, CV_32F);
                 src.convertTo(src32, CV_32F);
                 src32p = &src32;
             }
@@ -138,7 +142,7 @@ public:
     {
         CV_Check(inputs.size(), inputs.size() == 1 || inputs.size() == 2, "Cast expects 1 (Cast) or 2 (CastLike) inputs");
         outputs.assign(1, inputs[0]);
-        return false;
+        return !inputs[0].empty();
     }
 
     virtual  void getTypes(const std::vector<MatType>& inputs,
@@ -261,8 +265,13 @@ public:
 
         int plannedDDepth = (runtimeTargetDepth == CV_16F) ? CV_32F :
                             (runtimeTargetDepth == CV_16BF ? CV_16U : runtimeTargetDepth);
-        if (dst0.depth() != plannedDDepth)
-            dst0.create(dst0.size(), CV_MAKETYPE(plannedDDepth, src0.channels()));
+        if (dst0.depth() != plannedDDepth) {
+            dst0.create(dst0.dims, dst0.size.p, CV_MAKETYPE(plannedDDepth, src0.channels()));
+        }
+
+        if (src0.empty()) {
+             return;
+        }
 
         Mat src = src0;
         Mat dst = dst0;
