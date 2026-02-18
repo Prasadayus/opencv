@@ -5,7 +5,8 @@
 #include "precomp.hpp"
 
 #include "net_impl.hpp"
-
+#include <opencv2/core/utils/logger.hpp>
+#include <cuda_runtime.h>
 #ifdef HAVE_ONNXRUNTIME
 #include <onnxruntime_cxx_api.h>
 #endif
@@ -96,6 +97,26 @@ static Ort::Value createOrtTensorFromMat(Ort::Session& session,
         in_elem_type,
         &input_tensor_raw));
     return Ort::Value(input_tensor_raw);
+}
+
+static Ort::Value createGpuTensorFromMat(Ort::Session& session,
+                                         Ort::Value& cpu_tensor,
+                                         Mat& inputBlob,
+                                         const std::vector<int64_t>& inputDims,
+                                         ONNXTensorElementDataType in_elem_type)
+{
+     Ort::MemoryInfo gpu_mem_info("Cuda", OrtDeviceAllocator, 0, OrtMemTypeDefault);
+
+    const size_t nbytes = (size_t)inputBlob.total() * inputBlob.elemSize();
+
+    return Ort::Value::CreateTensor(
+        gpu_mem_info,
+        cpu_tensor.GetTensorMutableData<float>(),
+        nbytes,
+        inputDims.data(),
+        inputDims.size(),
+        in_elem_type
+    );
 }
 
 static Mat runOrtSession(Net::Impl& self,
@@ -501,29 +522,81 @@ void Net::Impl::allocateLayerOutputs(
 void Net::Impl::forwardMainGraph(InputArrayOfArrays inputs, OutputArrayOfArrays outputs)
 {
 #ifdef HAVE_ONNXRUNTIME
-    bool session_exists = (this->ort_session != nullptr);
-    CV_LOG_INFO(NULL, "[DEBUG] ORT Enabled. Session Exists: " << (session_exists ? "YES" : "NO"));
+    // --- 1. JIT SESSION SWITCHING LOGIC ---
+    // Check if the user wants GPU but we are currently on CPU
+    if (this->ort_session && 
+        this->preferableTarget == DNN_TARGET_CUDA && 
+        !this->ort_session_is_gpu)
+    {
+        CV_LOG_INFO(NULL, "DNN/ORT: Target is CUDA. Switching session to GPU...");
+        try {
+            // A. Destroy old CPU session
+            this->ort_session.reset(); 
+            this->ort_names_cache.reset(); // Clear cache as it binds to the session
 
+            // B. Create CUDA Options
+            OrtCUDAProviderOptions cuda_options;
+            cuda_options.device_id = 0; // Default GPU 0
+            
+            // C. Update Session Options
+            // Note: We append CUDA to existing options
+            this->ort_session_options->AppendExecutionProvider_CUDA(cuda_options);
+
+            // D. Reload Session from Disk
+            // We use the file path stored during readNet
+            this->ort_session = std::make_shared<Ort::Session>(*this->ort_env, this->modelFileName.c_str(), *this->ort_session_options);
+            
+            this->ort_session_is_gpu = true;
+            CV_LOG_INFO(NULL, "DNN/ORT: Session successfully migrated to GPU.");
+        }
+        catch (const std::exception& e) {
+            CV_LOG_ERROR(NULL, "DNN/ORT: Failed to switch to GPU (" << e.what() << "). Keeping CPU session.");
+            // Re-create CPU session if GPU failed
+            this->ort_session = std::make_shared<Ort::Session>(*this->ort_env, this->modelFileName.c_str(), Ort::SessionOptions());
+            this->ort_session_is_gpu = false;
+        }
+    }
+    // ----------------------------------------
+
+    // --- 2. INFERENCE LOGIC ---
     if (this->ort_session)
     {
-        if (!netInputLayer || netInputLayer->blobs.empty())
-            CV_Error(Error::StsError, "DNN/ORT: No input data found");
+        std::vector<Mat> inMats;
+        inputs.getMatVector(inMats);
+        Mat inputBlob;
 
-        static const Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
+        if (!inMats.empty()) inputBlob = inMats[0];
+        else if (netInputLayer && !netInputLayer->blobs.empty()) inputBlob = netInputLayer->blobs[0];
+        else CV_Error(Error::StsError, "DNN/ORT: No input data found");
 
-        if (!this->ort_names_cache)
+        // Refresh names cache if we reloaded the session
+        if (!this->ort_names_cache) {
             this->ort_names_cache = std::make_shared<OrtNamesCache>(*this->ort_session);
+        }
 
-        Mat inputBlob = netInputLayer->blobs[0];
+        // Prepare Input Tensor
         std::vector<int64_t> inputDims;
-        ONNXTensorElementDataType in_elem_type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
-        Ort::Value input_tensor = createOrtTensorFromMat(*this->ort_session, memory_info, inputBlob, inputDims, in_elem_type);
+        ONNXTensorElementDataType in_elem_type;
+        
+        static const Ort::MemoryInfo cpu_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
+        
+        // Always start with CPU wrapper
+        Ort::Value input_tensor = createOrtTensorFromMat(*this->ort_session, cpu_info, inputBlob, inputDims, in_elem_type);
+
+        // If we are on GPU, ORT handles CPU->GPU copy automatically during Run(),
+        // OR you can explicitly copy using your createGpuTensorFromMat helper.
+        // For simplicity, letting ORT handle the copy is safer, but here is your logic:
+        if (this->ort_session_is_gpu) 
+        {
+             // Optional: Explicitly move input to GPU before inference
+             input_tensor = createGpuTensorFromMat(*this->ort_session, input_tensor, inputBlob, inputDims, in_elem_type);
+        }
 
         runOrtSession(*this, *this->ort_session, *this->ort_names_cache, input_tensor, outputs);
         return;
     }
-
 #endif
+
     if (!mainGraph) {
         CV_Error(Error::StsNullPtr, "the model was not loaded");
     }
@@ -683,8 +756,10 @@ void Net::Impl::traceArg(std::ostream& strm_, const char* prefix, size_t i, Arg 
 void Net::Impl::setMainGraphInput(InputArray m, const std::string& inpname)
 {
 #ifdef HAVE_ONNXRUNTIME
+
     if (this->ort_session)
     {
+
         if (!netInputLayer) {
             netInputLayer = Ptr<DataLayer>(new DataLayer());
             netInputLayer->name = "ort_data_layer";

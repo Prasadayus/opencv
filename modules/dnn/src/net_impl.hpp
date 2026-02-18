@@ -250,6 +250,7 @@ struct Net::Impl : public detail::NetImplBase
     std::shared_ptr<Ort::Session> ort_session;
     std::shared_ptr<Ort::SessionOptions> ort_session_options;
     std::shared_ptr<OrtNamesCache> ort_names_cache;
+    bool ort_session_is_gpu = false;
 #endif
 
     void allocateLayer(int lid, const LayersShapesMap& layersShapes);

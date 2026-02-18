@@ -112,34 +112,59 @@ set(libs "")
 
 # ONNX Runtime
 ocv_option(WITH_ONNXRUNTIME "Build with ONNX Runtime support" OFF)
+
 if(WITH_ONNXRUNTIME)
-  set(ORT_VERSION "1.17.1")
-  set(ORT_FILENAME "onnxruntime-linux-x64-${ORT_VERSION}.tgz")
-  set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/${ORT_FILENAME}")
-  set(ORT_MD5 "405e3ef137247c5229207da596ac45c0")
+set(HAVE_ONNXRUNTIME 1 CACHE INTERNAL "ONNX Runtime availability")
+    message(STATUS ">> [ORT] AUTOMATION: Preparing ONNX Runtime (GPU)...")
 
-  ocv_download(FILENAME ${ORT_FILENAME}
-               URL ${ORT_URL}
-               DESTINATION_DIR "${OpenCV_BINARY_DIR}/3rdparty/onnxruntime"
-               ID "ORT"
-               HASH ${ORT_MD5}
-               UNPACK)
+    set(ORT_VER "1.23.2")
+    set(ORT_FILENAME "onnxruntime-linux-x64-gpu-${ORT_VER}.tgz")
+    set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${ORT_FILENAME}")
 
-  set(ORT_INSTALL_DIR "${OpenCV_BINARY_DIR}/3rdparty/onnxruntime/onnxruntime-linux-x64-${ORT_VERSION}")
+    set(ORT_DOWNLOAD_DIR "${OpenCV_BINARY_DIR}/3rdparty/onnxruntime")
+    set(ORT_ARCHIVE "${ORT_DOWNLOAD_DIR}/${ORT_FILENAME}")
+    set(ORT_EXTRACTED_DIR "${ORT_DOWNLOAD_DIR}/onnxruntime-linux-x64-gpu-${ORT_VER}")
 
-  if(EXISTS "${ORT_INSTALL_DIR}/include" AND EXISTS "${ORT_INSTALL_DIR}/lib/libonnxruntime.so")
-    set(HAVE_ONNXRUNTIME 1 CACHE INTERNAL "ONNX Runtime availability")
+    file(MAKE_DIRECTORY "${ORT_DOWNLOAD_DIR}")
 
-    list(APPEND include_dirs "${ORT_INSTALL_DIR}/include")
-    list(APPEND libs "${ORT_INSTALL_DIR}/lib/libonnxruntime.so")
+    if(NOT EXISTS "${ORT_ARCHIVE}")
+        message(STATUS ">> [ORT] Downloading ${ORT_FILENAME}...")
+        file(DOWNLOAD "${ORT_URL}" "${ORT_ARCHIVE}"
+             SHOW_PROGRESS
+             STATUS DOWNLOAD_STATUS
+             LOG DOWNLOAD_LOG)
+
+        list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
+        if(NOT STATUS_CODE EQUAL 0)
+            message(FATAL_ERROR ">> [ORT] Download failed! Log: ${DOWNLOAD_LOG}")
+        endif()
+    else()
+        message(STATUS ">> [ORT] File already downloaded.")
+    endif()
+
+    if(NOT EXISTS "${ORT_EXTRACTED_DIR}")
+        message(STATUS ">> [ORT] Extracting...")
+        execute_process(
+            COMMAND tar -xzf "${ORT_ARCHIVE}" -C "${ORT_DOWNLOAD_DIR}"
+            RESULT_VARIABLE EXTRACT_STATUS
+        )
+        if(NOT EXTRACT_STATUS EQUAL 0)
+            message(FATAL_ERROR ">> [ORT] Extraction failed!")
+        endif()
+    endif()
+
+    message(STATUS ">> [ORT] Found at: ${ORT_EXTRACTED_DIR}")
 
     add_definitions(-DHAVE_ONNXRUNTIME=1)
+    list(APPEND include_dirs "${ORT_EXTRACTED_DIR}/include")
+    list(APPEND libs "${ORT_EXTRACTED_DIR}/lib/libonnxruntime.so")
 
     if(NOT APPLE)
-      set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-rpath,'$ORIGIN/../3rdparty/onnxruntime/onnxruntime-linux-x64-${ORT_VERSION}/lib'")
+      set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-rpath,'${ORT_EXTRACTED_DIR}/lib'")
+      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath,'${ORT_EXTRACTED_DIR}/lib'")
     endif()
-    message(STATUS "DNN: ONNX Runtime acquired and enabled")
-  endif()
+
+    message(STATUS ">> [ORT] Integration Complete (GPU Mode).")
 endif()
 
 if(HAVE_PROTOBUF)

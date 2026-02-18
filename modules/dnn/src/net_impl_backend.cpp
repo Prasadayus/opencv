@@ -6,12 +6,15 @@
 
 #include "net_impl.hpp"
 #include "legacy_backend.hpp"
-
 #include "backend.hpp"
 #include "factory.hpp"
-
+#include <vector>
 #ifdef HAVE_CUDA
 #include "cuda4dnn/init.hpp"
+#endif
+
+#ifdef HAVE_ONNXRUNTIME
+#include <onnxruntime_cxx_api.h>
 #endif
 
 namespace cv {
@@ -190,6 +193,7 @@ void Net::Impl::setPreferableBackend(Net& net, int backendId)
     {
         if (mainGraph)
         {
+            CV_LOG_INFO(NULL, "DNN: setPreferableBackend(" << backendId << ") called with mainGraph active. Setting preferableBackend to " << backendId);
             CV_LOG_WARNING(NULL, "Back-ends are not supported by the new graph engine for now");
             preferableBackend = backendId;
             return;
@@ -224,8 +228,19 @@ void Net::Impl::setPreferableBackend(Net& net, int backendId)
 
 void Net::Impl::setPreferableTarget(int targetId)
 {
+   #ifdef HAVE_ONNXRUNTIME
+    if (this->ort_session) 
+    {
+        if (this->preferableTarget != targetId) {
+            CV_LOG_INFO(NULL, "DNN/ORT: Target changed to " << targetId << ". Session update deferred to forward().");
+            this->preferableTarget = targetId;
+        }
+        return; // <--- CRITICAL: Do not run standard OpenCV fallback logic below
+    }
+#endif
     if (mainGraph)
     {
+        CV_LOG_INFO(NULL, "DNN: setPreferableTarget(" << targetId << ") called with mainGraph active.");
         CV_LOG_WARNING(NULL, "Targets are not supported by the new graph engine for now");
         return;
     }
@@ -239,41 +254,47 @@ void Net::Impl::setPreferableTarget(int targetId)
     if (preferableTarget != targetId)
     {
         preferableTarget = targetId;
-        if (IS_DNN_OPENCL_TARGET(targetId))
+      if (IS_DNN_OPENCL_TARGET(targetId))
         {
 #ifndef HAVE_OPENCL
+            // Fallback if OpenCL is not available
 #ifdef HAVE_INF_ENGINE
             if (preferableBackend == DNN_BACKEND_OPENCV)
 #else
-            if (preferableBackend == DNN_BACKEND_DEFAULT ||
-                preferableBackend == DNN_BACKEND_OPENCV)
-#endif  // HAVE_INF_ENGINE
-                preferableTarget = DNN_TARGET_CPU;
+            if (preferableBackend == DNN_BACKEND_DEFAULT || preferableBackend == DNN_BACKEND_OPENCV)
+#endif 
+                this->preferableTarget = DNN_TARGET_CPU;
 #else
+            // Check for FP16 support if requested
             bool fp16 = ocl::Device::getDefault().isExtensionSupported("cl_khr_fp16");
             if (!fp16 && targetId == DNN_TARGET_OPENCL_FP16)
-                preferableTarget = DNN_TARGET_OPENCL;
+                this->preferableTarget = DNN_TARGET_OPENCL;
 #endif
         }
 
-        if (IS_DNN_CUDA_TARGET(targetId))
+        // 2. CUDA Logic (Modified for ORT)
+        else if (IS_DNN_CUDA_TARGET(targetId))
         {
-            preferableTarget = DNN_TARGET_CPU;
-#ifdef HAVE_CUDA
-            if (cuda4dnn::doesDeviceSupportFP16() && targetId == DNN_TARGET_CUDA_FP16)
-                preferableTarget = DNN_TARGET_CUDA_FP16;
+            // We allow CUDA if we have native CUDA support OR if we have ONNX Runtime linked
+#if defined(HAVE_CUDA) || defined(HAVE_ONNXRUNTIME)
+            if (targetId == DNN_TARGET_CUDA_FP16)
+                this->preferableTarget = DNN_TARGET_CUDA_FP16;
             else
-                preferableTarget = DNN_TARGET_CUDA;
+                this->preferableTarget = DNN_TARGET_CUDA;
+#else
+            // Fallback to CPU if neither is present
+            this->preferableTarget = DNN_TARGET_CPU;
 #endif
         }
-#if !defined(__arm64__) || !__arm64__
+
+        // 3. ARM / CPU Logic
+#if !defined(__arm64__) && !defined(__aarch64__)
         if (targetId == DNN_TARGET_CPU_FP16)
         {
             CV_LOG_WARNING(NULL, "DNN: fall back to DNN_TARGET_CPU. Only ARM v8 CPU is supported by DNN_TARGET_CPU_FP16.");
-            targetId = DNN_TARGET_CPU;
+            this->preferableTarget = DNN_TARGET_CPU;
         }
 #endif
-
         clear();
 
         if (targetId == DNN_TARGET_CPU_FP16)

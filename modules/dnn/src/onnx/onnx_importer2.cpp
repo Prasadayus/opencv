@@ -2817,13 +2817,17 @@ Net readNetFromONNX2(const String& onnxFile)
 
         impl->ort_env = s_ort_env;
         impl->ort_session_options = std::make_shared<Ort::SessionOptions>();
+        
+        // INITIAL LOAD: CPU ONLY
         impl->ort_session = std::make_shared<Ort::Session>(*s_ort_env, onnxFile.c_str(), *impl->ort_session_options);
 
         impl->modelFileName = onnxFile;
         impl->modelFormat = DNN_MODEL_ONNX;
+        impl->ort_session_is_gpu = false; // <--- Set Initial State
+        
         impl->newGraph("ort_session_active", {}, true);
 
-        CV_LOG_INFO(NULL, "DNN/ONNX: Successfully initialized ORT Session for " << onnxFile);
+        CV_LOG_INFO(NULL, "DNN/ORT: Initialized (CPU Mode)");
         return net;
     }
     catch (const std::exception& e) {
