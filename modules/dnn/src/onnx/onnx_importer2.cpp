@@ -1391,6 +1391,19 @@ void ONNXImporter2::parseConv(LayerParams& layerParams, const opencv_onnx::NodeP
 
     if (net.isConstArg(node_inputs[1]) && (n_inputs == 2 || net.isConstArg(node_inputs[2]))) {
         Mat weights = net.argTensor(node_inputs[1]);
+        MatShape weights_shape = shape(weights);
+
+        if (!layerParams.has("kernel_size") &&
+            weights_shape.size() >= 3)
+        {
+            int kDims = (int)weights_shape.size() - 2;
+            std::vector<int> kernel_size(kDims);
+            for (int i = 0; i < kDims; ++i)
+                kernel_size[i] = weights_shape[2 + i];
+            layerParams.set("kernel_size",
+                DictValue::arrayInt(kernel_size.data(), kDims));
+        }
+        layerParams.set("num_output", weights_shape[0]);
         layerParams.blobs.push_back(weights);
         if (n_inputs > 2) {
             Mat bias = net.argTensor(node_inputs[2]);
