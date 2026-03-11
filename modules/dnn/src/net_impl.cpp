@@ -991,7 +991,9 @@ Mat Net::Impl::forward(const String& outputName)
     FPDenormalsIgnoreHintScope fp_denormals_ignore_scope;
 
     if (mainGraph) {
-        return forwardWithSingleOutput(outputName);
+        Mat result;
+        forwardWithSingleOutput(outputName, result);
+        return result;
     }
 
     String layerName = outputName;
@@ -1049,8 +1051,7 @@ void Net::Impl::forward(OutputArrayOfArrays outputBlobs, const String& outputNam
 
     if (mainGraph) {
         if (!outputName.empty()) {
-            Mat result = forwardWithSingleOutput(outputName);
-            result.copyTo(outputBlobs);
+            forwardWithSingleOutput(outputName, outputBlobs);
             return;
         }
         forwardWithMultipleOutputs(outputBlobs, {});
