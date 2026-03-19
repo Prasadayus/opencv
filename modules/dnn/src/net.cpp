@@ -534,13 +534,13 @@ ModelFormat Net::getModelFormat() const
     return impl->modelFormat;
 }
 
-Mat Net::tokenize(const String& text) const
+Mat Net::tokenize(const String& text)
 {
     CV_Assert(impl);
     return impl->tokenize(text);
 }
 
-String Net::detokenize(InputArray tokenIds) const
+String Net::detokenize(InputArray tokenIds)
 {
     CV_Assert(impl);
     return impl->detokenize(tokenIds);
@@ -572,19 +572,19 @@ void Net::setGuidance(const String& type, const String& data, bool enableFfToken
 }
 
 String Net::applyChatTemplate(const String& messages, const String& templateStr,
-                               const String& tools, bool addGenerationPrompt) const
+                               const String& tools, bool addGenerationPrompt)
 {
     CV_Assert(impl);
     return impl->applyChatTemplate(messages, templateStr, tools, addGenerationPrompt);
 }
 
-String Net::getModelType() const
+String Net::getModelType()
 {
     CV_Assert(impl);
     return impl->getModelType();
 }
 
-String Net::getDeviceType() const
+String Net::getDeviceType()
 {
     CV_Assert(impl);
     return impl->getDeviceType();
@@ -610,17 +610,17 @@ void Net::setGuidance(const String&, const String&, bool)
     CV_Error(cv::Error::StsNotImplemented, "setGuidance requires ONNX Runtime GenAI support");
 }
 
-String Net::applyChatTemplate(const String&, const String&, const String&, bool) const
+String Net::applyChatTemplate(const String&, const String&, const String&, bool)
 {
     CV_Error(cv::Error::StsNotImplemented, "applyChatTemplate requires ONNX Runtime GenAI support");
 }
 
-String Net::getModelType() const
+String Net::getModelType()
 {
     CV_Error(cv::Error::StsNotImplemented, "getModelType requires ONNX Runtime GenAI support");
 }
 
-String Net::getDeviceType() const
+String Net::getDeviceType()
 {
     CV_Error(cv::Error::StsNotImplemented, "getDeviceType requires ONNX Runtime GenAI support");
 }

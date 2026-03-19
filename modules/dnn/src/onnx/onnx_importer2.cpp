@@ -2707,48 +2707,14 @@ Net readNetFromONNX2_ORT(const String& onnxFile)
 #ifdef HAVE_ONNXRUNTIME_GENAI
 Net readNetFromONNX2_OGA(const String& modelDir)
 {
-    try
-    {
-        Net net;
-        auto impl = net.getImpl();
-
-        impl->oga_model = std::shared_ptr<OgaModel>(
-            OgaModel::Create(modelDir.c_str()).release(),
-            [](OgaModel* p) { OgaDestroyModel(p); });
-        impl->oga_tokenizer = std::shared_ptr<OgaTokenizer>(
-            OgaTokenizer::Create(*impl->oga_model).release(),
-            [](OgaTokenizer* p) { OgaDestroyTokenizer(p); });
-
-        impl->modelFileName = modelDir;
-        impl->modelFormat   = DNN_MODEL_ONNX;
-
-        {
-            OgaMultiModalProcessor* proc = nullptr;
-            OgaResult* r = OgaCreateMultiModalProcessor(impl->oga_model.get(), &proc);
-            if (r == nullptr)
-            {
-                impl->oga_processor = std::shared_ptr<OgaMultiModalProcessor>(
-                    proc, [](OgaMultiModalProcessor* p) { OgaDestroyMultiModalProcessor(p); });
-                impl->oga_is_multimodal = true;
-            }
-            else
-            {
-                std::string errMsg = OgaResultGetError(r);
-                CV_LOG_INFO(NULL, "DNN/OGA: Multimodal processor not loaded: " << errMsg);
-                OgaDestroyResult(r);
-                impl->oga_is_multimodal = false;
-            }
-        }
-        impl->newGraph("oga_session_active", {}, true);
-
-        CV_LOG_INFO(NULL, "DNN/ONNX: Successfully initialized OGA model for " << modelDir);
-        return net;
-    }
-    catch (const std::exception& e)
-    {
-        CV_LOG_WARNING(NULL, "DNN/ONNX/OGA: OGA initialization failed (" << e.what() << ")");
-        return Net();
-    }
+    Net net;
+    auto impl = net.getImpl();
+    impl->oga_model_dir = modelDir;
+    impl->oga_initialized = false;
+    impl->modelFileName = modelDir;
+    impl->modelFormat   = DNN_MODEL_ONNX;
+    CV_LOG_INFO(NULL, "DNN/OGA: Registered model directory " << modelDir);
+    return net;
 }
 #endif  // HAVE_ONNXRUNTIME_GENAI
 

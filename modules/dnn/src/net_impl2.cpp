@@ -277,12 +277,63 @@ std::vector<Mat> Net::Impl::runOrtSession(std::vector<Mat> inputBlobs, const std
 #endif
 
 #ifdef HAVE_ONNXRUNTIME_GENAI
+void Net::Impl::initOgaModel()
+{
+    if (oga_initialized)
+        return;
+    CV_Assert(!oga_model_dir.empty());
+
+    auto config = OgaConfig::Create(oga_model_dir.c_str());
+
+    if (IS_DNN_CUDA_TARGET(preferableTarget))
+    {
+        config->ClearProviders();
+        config->AppendProvider("cuda");
+    }
+
+    oga_model = std::shared_ptr<OgaModel>(
+        OgaModel::Create(*config).release(),
+        [](OgaModel* p) { OgaDestroyModel(p); });
+
+    oga_tokenizer = std::shared_ptr<OgaTokenizer>(
+        OgaTokenizer::Create(*oga_model).release(),
+        [](OgaTokenizer* p) { OgaDestroyTokenizer(p); });
+
+    oga_initialized = true;
+    CV_LOG_INFO(NULL, "DNN/OGA: Initialized model from " << oga_model_dir);
+}
+
+void Net::Impl::initOgaMultiModalProcessor()
+{
+    if (oga_processor)
+        return;
+    CV_Assert(oga_model);
+
+    OgaMultiModalProcessor* proc = nullptr;
+    OgaResult* r = OgaCreateMultiModalProcessor(oga_model.get(), &proc);
+    if (r == nullptr)
+    {
+        oga_processor = std::shared_ptr<OgaMultiModalProcessor>(
+            proc, [](OgaMultiModalProcessor* p) { OgaDestroyMultiModalProcessor(p); });
+        oga_is_multimodal = true;
+    }
+    else
+    {
+        std::string msg = OgaResultGetError(r);
+        OgaDestroyResult(r);
+        CV_Error(Error::StsError, "DNN/OGA: Model does not support multimodal: " + msg);
+    }
+}
+
 std::vector<Mat> Net::Impl::runOgaSession(const std::vector<Mat>& inputBlobs)
 {
+    initOgaModel();
     CV_Assert(this->oga_model);
 
-    if (oga_is_multimodal && !oga_image_mat.empty() && !oga_raw_prompt.empty())
+    if (!oga_image_mat.empty() && !oga_raw_prompt.empty())
     {
+        initOgaMultiModalProcessor();
+
         std::vector<uchar> buf;
 #ifndef HAVE_OPENCV_IMGCODECS
         CV_Error(Error::StsNotImplemented,
@@ -363,7 +414,6 @@ std::vector<Mat> Net::Impl::runOgaSession(const std::vector<Mat>& inputBlobs)
 
 void Net::Impl::setPrompt(const String& prompt)
 {
-    CV_Assert(oga_is_multimodal);
     oga_raw_prompt = prompt;
 }
 
@@ -385,8 +435,9 @@ void Net::Impl::setGuidance(const String& type, const String& data, bool enableF
 }
 
 String Net::Impl::applyChatTemplate(const String& messages, const String& templateStr,
-                                     const String& tools, bool addGenerationPrompt) const
+                                     const String& tools, bool addGenerationPrompt)
 {
+    initOgaModel();
     CV_Assert(oga_tokenizer);
     const char* tmpl = templateStr.empty() ? nullptr : templateStr.c_str();
     const char* tls  = tools.empty()       ? nullptr : tools.c_str();
@@ -394,24 +445,33 @@ String Net::Impl::applyChatTemplate(const String& messages, const String& templa
     return String(result.p_);
 }
 
-String Net::Impl::getModelType() const
+String Net::Impl::getModelType()
 {
+    initOgaModel();
     CV_Assert(oga_model);
     OgaString t = oga_model->GetType();
     return String(t.p_);
 }
 
-String Net::Impl::getDeviceType() const
+String Net::Impl::getDeviceType()
 {
+    if (!oga_initialized)
+    {
+        if (IS_DNN_CUDA_TARGET(preferableTarget))
+            return "cuda";
+        return "cpu";
+    }
     CV_Assert(oga_model);
     OgaString t = oga_model->GetDeviceType();
     return String(t.p_);
 }
 #endif
 
-Mat Net::Impl::tokenize(const String& text) const
+Mat Net::Impl::tokenize(const String& text)
 {
 #ifdef HAVE_ONNXRUNTIME_GENAI
+    if (!oga_model_dir.empty())
+        initOgaModel();
     CV_Assert(oga_tokenizer);
     auto sequences = OgaSequences::Create();
     oga_tokenizer->Encode(text.c_str(), *sequences);
@@ -426,14 +486,16 @@ Mat Net::Impl::tokenize(const String& text) const
 #endif
 }
 
-String Net::Impl::detokenize(InputArray tokenIds) const
+String Net::Impl::detokenize(InputArray tokenIds)
 {
 #ifdef HAVE_ONNXRUNTIME_GENAI
+    if (!oga_model_dir.empty())
+        initOgaModel();
     Mat m = tokenIds.getMat();
     const int32_t* ptr = m.ptr<int32_t>();
     size_t count = (size_t)m.total();
 
-    if (oga_is_multimodal && oga_processor)
+    if (oga_processor)
     {
         const char* out_str = nullptr;
         OGA_CHECK(OgaProcessorDecode(oga_processor.get(), ptr, count, &out_str));
@@ -749,8 +811,9 @@ void Net::Impl::prepareForInference()
 #endif
 
 #ifdef HAVE_ONNXRUNTIME_GENAI
-    if (this->oga_model)
+    if (!oga_model_dir.empty())
     {
+        initOgaModel();
         prepared = true;
         finalizeLayers = false;
         return;
@@ -832,10 +895,11 @@ void Net::Impl::allocateLayerOutputs(
 void Net::Impl::forwardMainGraph(InputArrayOfArrays inputs, OutputArrayOfArrays outputs)
 {
 #ifdef HAVE_ONNXRUNTIME_GENAI
-    if (this->oga_model)
+    if (!oga_model_dir.empty())
     {
+        initOgaModel();
         bool has_blobs = netInputLayer && !netInputLayer->blobs.empty();
-        bool has_vlm = oga_is_multimodal && !oga_image_mat.empty() && !oga_raw_prompt.empty();
+        bool has_vlm = !oga_image_mat.empty() && !oga_raw_prompt.empty();
 
         if (!has_blobs && !has_vlm)
             CV_Error(Error::StsError, "DNN/OGA: No input data found. Call net.setInput() before forward().");
@@ -928,10 +992,11 @@ void Net::Impl::forwardMainGraph(InputArrayOfArrays inputs, OutputArrayOfArrays 
 void Net::Impl::forwardWithSingleOutput(const std::string& outname, OutputArrayOfArrays outputBlobs)
 {
 #ifdef HAVE_ONNXRUNTIME_GENAI
-    if (this->oga_model)
+    if (!oga_model_dir.empty())
     {
+        initOgaModel();
         bool has_blobs = netInputLayer && !netInputLayer->blobs.empty();
-        bool has_vlm = oga_is_multimodal && !oga_image_mat.empty() && !oga_raw_prompt.empty();
+        bool has_vlm = !oga_image_mat.empty() && !oga_raw_prompt.empty();
 
         if (!has_blobs && !has_vlm)
             CV_Error(Error::StsError, "DNN/OGA: No input data found");
@@ -1027,10 +1092,11 @@ void Net::Impl::forwardWithSingleOutput(const std::string& outname, OutputArrayO
 void Net::Impl::forwardWithMultipleOutputs(OutputArrayOfArrays outblobs, const std::vector<std::string>& outnames)
 {
 #ifdef HAVE_ONNXRUNTIME_GENAI
-    if (this->oga_model)
+    if (!oga_model_dir.empty())
     {
+        initOgaModel();
         bool has_blobs = netInputLayer && !netInputLayer->blobs.empty();
-        bool has_vlm = oga_is_multimodal && !oga_image_mat.empty() && !oga_raw_prompt.empty();
+        bool has_vlm = !oga_image_mat.empty() && !oga_raw_prompt.empty();
 
         if (!has_blobs && !has_vlm)
             CV_Error(Error::StsError, "DNN/OGA: No input data found");
@@ -1239,15 +1305,16 @@ void Net::Impl::traceArg(std::ostream& strm_, const char* prefix, size_t i, Arg 
 void Net::Impl::setMainGraphInput(InputArray m, const std::string& inpname)
 {
 #ifdef HAVE_ONNXRUNTIME_GENAI
-    if (this->oga_model)
+    if (!oga_model_dir.empty())
     {
+        initOgaModel();
         if (!netInputLayer) {
             netInputLayer = Ptr<DataLayer>(new DataLayer());
             netInputLayer->name = "oga_data_layer";
             netInputLayer->type = "Data";
         }
 
-        if (inpname == "image" && oga_is_multimodal)
+        if (inpname == "image")
         {
             oga_image_mat = m.getMat().clone();
             return;

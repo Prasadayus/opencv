@@ -363,13 +363,22 @@ void Net::Impl::setPreferableTarget(int targetId)
 
         if (IS_DNN_CUDA_TARGET(targetId))
         {
-            preferableTarget = DNN_TARGET_CPU;
-#ifdef HAVE_CUDA
-            if (cuda4dnn::doesDeviceSupportFP16() && targetId == DNN_TARGET_CUDA_FP16)
-                preferableTarget = DNN_TARGET_CUDA_FP16;
+#ifdef HAVE_ONNXRUNTIME_GENAI
+            if (!oga_model_dir.empty())
+            {
+                preferableTarget = targetId;
+            }
             else
-                preferableTarget = DNN_TARGET_CUDA;
 #endif
+            {
+                preferableTarget = DNN_TARGET_CPU;
+#ifdef HAVE_CUDA
+                if (cuda4dnn::doesDeviceSupportFP16() && targetId == DNN_TARGET_CUDA_FP16)
+                    preferableTarget = DNN_TARGET_CUDA_FP16;
+                else
+                    preferableTarget = DNN_TARGET_CUDA;
+#endif
+            }
         }
 #if !defined(__arm64__) || !__arm64__
         if (targetId == DNN_TARGET_CPU_FP16)

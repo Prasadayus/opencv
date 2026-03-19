@@ -273,6 +273,8 @@ struct Net::Impl : public detail::NetImplBase
 #endif
 
 #ifdef HAVE_ONNXRUNTIME_GENAI
+    std::string oga_model_dir;
+    bool oga_initialized = false;
     std::shared_ptr<OgaModel> oga_model;
     std::shared_ptr<OgaTokenizer> oga_tokenizer;
     std::shared_ptr<OgaMultiModalProcessor> oga_processor;
@@ -437,6 +439,8 @@ struct Net::Impl : public detail::NetImplBase
 #endif
 
 #ifdef HAVE_ONNXRUNTIME_GENAI
+    void initOgaModel();
+    void initOgaMultiModalProcessor();
     // Run a full Generate() call for the OGA engine.
     // @param inputBlobs  single 1-D CV_32S Mat containing the input token IDs.
     // @returns           single 1-D CV_32S Mat containing all generated token IDs
@@ -447,12 +451,12 @@ struct Net::Impl : public detail::NetImplBase
     void setSearchOptionBool(const String& name, bool value);
     void setGuidance(const String& type, const String& data, bool enableFfTokens);
     String applyChatTemplate(const String& messages, const String& templateStr,
-                              const String& tools, bool addGenerationPrompt) const;
-    String getModelType() const;
-    String getDeviceType() const;
+                              const String& tools, bool addGenerationPrompt);
+    String getModelType();
+    String getDeviceType();
 #endif
-    Mat tokenize(const String& text) const;
-    String detokenize(InputArray tokenIds) const;
+    Mat tokenize(const String& text);
+    String detokenize(InputArray tokenIds);
 
     // run the whole model, convenience wrapper
     void forwardWithSingleOutput(const std::string& outname, OutputArrayOfArrays outputBlobs);

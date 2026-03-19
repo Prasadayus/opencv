@@ -716,8 +716,8 @@ CV__DNN_INLINE_NS_BEGIN
          */
         CV_WRAP Mat forward(const String& outputName = String());
 
-        CV_WRAP Mat tokenize(const String& text) const;
-        CV_WRAP String detokenize(InputArray tokenIds) const;
+        CV_WRAP Mat tokenize(const String& text);
+        CV_WRAP String detokenize(InputArray tokenIds);
         CV_WRAP void setPrompt(const String& prompt);
         CV_WRAP void setSearchOption(const String& name, double value);
         CV_WRAP void setSearchOptionBool(const String& name, bool value);
@@ -726,9 +726,9 @@ CV__DNN_INLINE_NS_BEGIN
         CV_WRAP String applyChatTemplate(const String& messages,
                                           const String& templateStr = String(),
                                           const String& tools = String(),
-                                          bool addGenerationPrompt = true) const;
-        CV_WRAP String getModelType() const;
-        CV_WRAP String getDeviceType() const;
+                                          bool addGenerationPrompt = true);
+        CV_WRAP String getModelType();
+        CV_WRAP String getDeviceType();
 
         /** @brief Runs forward pass to compute output of layer with name @p outputName.
          *  @param outputName name for layer which output is needed to get
