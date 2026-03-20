@@ -2806,6 +2806,7 @@ void ONNXImporter::parseResize(LayerParams& layerParams, const opencv_onnx::Node
 
 void ONNXImporter::parseUpsample(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)
 {
+    opencv_onnx::NodeProto node_proto_ = node_proto;
     //fused from Resize Subgraph
     if (layerParams.has("coordinate_transformation_mode"))
     {
@@ -2850,9 +2851,26 @@ void ONNXImporter::parseUpsample(LayerParams& layerParams, const opencv_onnx::No
             layerParams.set("zoom_factor_y", scales.at<float>(2));
             layerParams.set("zoom_factor_x", scales.at<float>(3));
         }
+        else
+        {
+            IterShape_t refIt = outShapes.find(input1);
+            IterShape_t inIt = outShapes.find(node_proto.input(0));
+            if (refIt != outShapes.end() && inIt != outShapes.end() &&
+                (int)refIt->second.size() >= 4 && (int)inIt->second.size() >= 4 &&
+                refIt->second[2] > 0 && refIt->second[3] > 0 &&
+                inIt->second[2] > 0 && inIt->second[3] > 0)
+            {
+                layerParams.set("height", refIt->second[2]);
+                layerParams.set("width", refIt->second[3]);
+                layerParams.set("zoom_factor_y", static_cast<float>(refIt->second[2]) / inIt->second[2]);
+                layerParams.set("zoom_factor_x", static_cast<float>(refIt->second[3]) / inIt->second[3]);
+                node_proto_.clear_input();
+                node_proto_.add_input(node_proto.input(0));
+            }
+        }
     }
     replaceLayerParam(layerParams, "mode", "interpolation");
-    addLayer(layerParams, node_proto);
+    addLayer(layerParams, node_proto_);
 }
 
 void ONNXImporter::parseSoftMax(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)
