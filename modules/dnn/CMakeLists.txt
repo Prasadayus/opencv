@@ -15,7 +15,7 @@ ocv_add_dispatched_file("layers/cpu_kernels/conv2_kernels" AVX AVX2 NEON NEON_FP
 ocv_add_dispatched_file_force_all("int8layers/conv2_int8_kernels" AVX2)
 ocv_add_dispatched_file("layers/cpu_kernels/activation_kernels" AVX AVX2 NEON NEON_FP16)
 
-ocv_add_module(dnn opencv_core opencv_imgproc WRAP python java objc js OPTIONAL opencv_imgcodecs)
+ocv_add_module(dnn opencv_core opencv_imgproc WRAP python java objc js)
 
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/plugin.cmake)
 
@@ -281,36 +281,30 @@ if(WITH_ONNXRUNTIME)
       endif()
 
       if(APPLE)
-  set(_ort_dylib "${ONNXRT_ROOT_DIR}/lib/libonnxruntime.${ONNXRUNTIME_VERSION}.dylib")
-
-  if(EXISTS "${_ort_dylib}")
-    execute_process(
-      COMMAND install_name_tool -id "libonnxruntime.dylib" "${_ort_dylib}"
-      RESULT_VARIABLE _ort_patch_result
-      ERROR_QUIET
-    )
-
-    if(_ort_patch_result EQUAL 0)
-      execute_process(
-        COMMAND codesign --force --sign - "${_ort_dylib}"
-        RESULT_VARIABLE _ort_sign_result
-        ERROR_QUIET
-      )
-
-      if(_ort_sign_result EQUAL 0)
-        message(STATUS "DNN/macOS: Patched ORT install name for ORT GenAI dlopen compatibility")
-      else()
-        message(WARNING "DNN/macOS: codesign failed for '${_ort_dylib}'. Workaround: export ORT_LIB_PATH=${_ort_dylib}")
+        set(_ort_dylib "${ONNXRT_ROOT_DIR}/lib/libonnxruntime.${ONNXRUNTIME_VERSION}.dylib")
+        if(EXISTS "${_ort_dylib}")
+          execute_process(
+            COMMAND install_name_tool -id "libonnxruntime.dylib" "${_ort_dylib}"
+            RESULT_VARIABLE _ort_patch_result
+            ERROR_QUIET
+          )
+          if(_ort_patch_result EQUAL 0)
+            execute_process(
+              COMMAND codesign --force --sign - "${_ort_dylib}"
+              RESULT_VARIABLE _ort_sign_result
+              ERROR_QUIET
+            )
+            if(_ort_sign_result EQUAL 0)
+              message(STATUS "DNN/macOS: Patched ORT install name for ORT GenAI dlopen compatibility")
+            else()
+              message(WARNING "DNN/macOS: codesign failed for '${_ort_dylib}'. Workaround: export ORT_LIB_PATH=${_ort_dylib}")
+            endif()
+          else()
+            message(WARNING "DNN/macOS: install_name_tool failed for '${_ort_dylib}'. Workaround: export ORT_LIB_PATH=${_ort_dylib}")
+          endif()
+        endif()
+        unset(_ort_dylib)
       endif()
-    else()
-      message(WARNING "DNN/macOS: install_name_tool failed for '${_ort_dylib}'. Workaround: export ORT_LIB_PATH=${_ort_dylib}")
-    endif()
-  endif()
-
-  unset(_ort_dylib)
-endif()
-
-include("${OpenCV_SOURCE_DIR}/cmake/FindONNX.cmake")
 
       include("${OpenCV_SOURCE_DIR}/cmake/FindONNX.cmake")
     endif()
@@ -418,13 +412,13 @@ include("${OpenCV_SOURCE_DIR}/cmake/FindONNX.cmake")
 endif()
 
 # ONNX Runtime GenAI
-ocv_option(WITH_ONNXRUNTIME_GENAI "Build with ONNX Runtime GenAI support" OFF)
+ocv_option(WITH_ONNXRUNTIME_GENAI "Build with ONNX Runtime GenAI support" OFF IF WITH_ONNXRUNTIME)
 ocv_option(DOWNLOAD_ONNXRUNTIME_GENAI "Download ONNX Runtime GenAI prebuilt binaries" OFF IF WITH_ONNXRUNTIME_GENAI)
-ocv_option(DOWNLOAD_ONNXRUNTIME_GENAI_GPU "Download GPU-enabled ORT-GenAI (CUDA on Linux/Win x64, DirectML on Win ARM64)" OFF IF WITH_ONNXRUNTIME_GENAI)
+ocv_option(DOWNLOAD_ONNXRUNTIME_GENAI_GPU "Download GPU-enabled ORT-GenAI (CUDA on Linux/Win x64, DirectML on Win ARM64)" OFF IF WITH_ONNXRUNTIME_GENAI AND DOWNLOAD_ONNXRUNTIME_GPU)
 
 set(ONNXRUNTIME_GENAI_VERSION "0.12.1" CACHE STRING "ONNX Runtime GenAI version to download (prebuilt binaries)")
 
-if(WITH_ONNXRUNTIME_GENAI)
+if(WITH_ONNXRUNTIME_GENAI AND WITH_ONNXRUNTIME)
   include("${OpenCV_SOURCE_DIR}/cmake/FindONNX.cmake")
 
   set(_ortga_download_requested OFF)
@@ -479,9 +473,6 @@ if(WITH_ONNXRUNTIME_GENAI)
           set(_ortga_md5 "91f59d2f37849729c6c45d15942ec6c6")
         endif()
       endif()
-      # linux-aarch64 is not available in the official v0.12.1 release assets.
-      # Users on aarch64 Linux must build from source and point to the
-      # installation via -DONNXGENAI_ROOT_DIR=<path>.
     endif()
 
     if(NOT _ortga_filename)
@@ -510,62 +501,6 @@ if(WITH_ONNXRUNTIME_GENAI)
 
       if(NOT APPLE AND NOT WIN32)
         set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-rpath,'$ORIGIN/../3rdparty/onnxruntime-genai/${_ortga_unpack_dirname}/lib'")
-      endif()
-
-      # ORT-GenAI GPU uses dlopen to load libonnxruntime.so at runtime (on Linux).
-      # The ORT-GenAI CUDA package does not include it, so download the ORT GPU
-      # package and copy the required libraries into the ORT-GenAI lib directory.
-      if(_ortga_gpu_requested AND NOT APPLE)
-        set(_oga_ort_filename "")
-        if(UNIX AND X86_64)
-          set(_oga_ort_filename "onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz")
-        elseif(WIN32 AND (X86_64 OR CMAKE_SIZEOF_VOID_P EQUAL 8))
-          set(_oga_ort_filename "onnxruntime-win-x64-gpu-${ONNXRUNTIME_VERSION}.zip")
-        endif()
-
-        if(_oga_ort_filename)
-          set(_oga_ort_url "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${_oga_ort_filename}")
-          string(REGEX REPLACE "\\.(tgz|tar\\.gz|zip)$" "" _oga_ort_unpack "${_oga_ort_filename}")
-          set(_oga_ort_dir "${OpenCV_BINARY_DIR}/3rdparty/onnxruntime-genai/${_oga_ort_unpack}")
-          set(_oga_ort_cache "${OPENCV_DOWNLOAD_PATH}/onnxruntime-genai/${_oga_ort_filename}")
-
-          if(NOT EXISTS "${_oga_ort_dir}")
-            if(NOT EXISTS "${_oga_ort_cache}")
-              file(MAKE_DIRECTORY "${OPENCV_DOWNLOAD_PATH}/onnxruntime-genai")
-              message(STATUS "DNN: Downloading ORT GPU package for ORT-GenAI: ${_oga_ort_url}")
-              file(DOWNLOAD "${_oga_ort_url}" "${_oga_ort_cache}"
-                   SHOW_PROGRESS STATUS _oga_ort_dl_status)
-              list(GET _oga_ort_dl_status 0 _oga_ort_dl_code)
-              if(NOT _oga_ort_dl_code EQUAL 0)
-                file(REMOVE "${_oga_ort_cache}")
-                message(WARNING "DNN: ORT GPU download failed. CUDA support may not work.")
-              endif()
-            endif()
-            if(EXISTS "${_oga_ort_cache}")
-              message(STATUS "DNN: Extracting ORT GPU package for ORT-GenAI")
-              execute_process(
-                COMMAND "${CMAKE_COMMAND}" -E tar xzf "${_oga_ort_cache}"
-                WORKING_DIRECTORY "${OpenCV_BINARY_DIR}/3rdparty/onnxruntime-genai"
-                RESULT_VARIABLE _oga_ort_extract_status)
-            endif()
-          endif()
-
-          if(EXISTS "${_oga_ort_dir}/lib")
-            file(GLOB _oga_ort_libs "${_oga_ort_dir}/lib/libonnxruntime*.so*")
-            if(_oga_ort_libs)
-              file(COPY ${_oga_ort_libs} DESTINATION "${ONNXGENAI_ROOT_DIR}/lib")
-              message(STATUS "DNN: Copied ORT GPU libraries to ORT-GenAI lib directory")
-            endif()
-          elseif(EXISTS "${_oga_ort_dir}/bin")
-            file(GLOB _oga_ort_libs "${_oga_ort_dir}/bin/onnxruntime*.dll")
-            if(_oga_ort_libs)
-              file(COPY ${_oga_ort_libs} DESTINATION "${ONNXGENAI_ROOT_DIR}/bin")
-              message(STATUS "DNN: Copied ORT GPU libraries to ORT-GenAI bin directory")
-            endif()
-          endif()
-        else()
-          message(WARNING "DNN: ORT-GenAI GPU requested but no ORT GPU package available for this platform.")
-        endif()
       endif()
 
       include("${OpenCV_SOURCE_DIR}/cmake/FindONNX.cmake")
