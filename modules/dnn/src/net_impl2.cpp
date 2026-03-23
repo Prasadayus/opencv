@@ -14,9 +14,7 @@
 
 #ifdef HAVE_ONNXRUNTIME_GENAI
 #include <ort_genai.h>
-#ifdef HAVE_OPENCV_IMGCODECS
-#include <opencv2/imgcodecs.hpp>
-#endif
+#include <fstream>
 
 #define OGA_CHECK(call) \
     do \
@@ -254,21 +252,20 @@ std::vector<Mat> Net::Impl::runOgaSession(const std::vector<Mat>& inputBlobs)
 {
     CV_Assert(this->oga_model);
 
-    if (!oga_image_mat.empty() && !oga_raw_prompt.empty())
+    if (!oga_image_path.empty() && !oga_raw_prompt.empty())
     {
         initOgaMultiModalProcessor();
-        std::vector<uchar> buf;
-#ifndef HAVE_OPENCV_IMGCODECS
-        CV_Error(Error::StsNotImplemented,
-                 "DNN/OGA: VLM image input requires OpenCV built with imgcodecs support.");
-#endif
-        Mat rgb;
-        cv::cvtColor(oga_image_mat, rgb, cv::COLOR_BGR2RGB);
-        cv::imencode(".png", rgb, buf);
-        const void* ptr = buf.data();
-        size_t sz       = buf.size();
 
-        auto imgs    = OgaImages::Load(&ptr, &sz, 1);
+        std::ifstream file(oga_image_path, std::ios::binary | std::ios::ate);
+        CV_Assert(file.is_open());
+        size_t fileSize = (size_t)file.tellg();
+        file.seekg(0);
+        std::vector<uchar> buf(fileSize);
+        file.read(reinterpret_cast<char*>(buf.data()), fileSize);
+
+        const void* ptr = buf.data();
+        size_t sz = buf.size();
+        auto imgs = OgaImages::Load(&ptr, &sz, 1);
         auto tensors = oga_processor->ProcessImages(oga_raw_prompt.c_str(), imgs.get());
 
         auto params = OgaGeneratorParams::Create(*oga_model);
@@ -299,7 +296,7 @@ std::vector<Mat> Net::Impl::runOgaSession(const std::vector<Mat>& inputBlobs)
         const size_t newLen    = fullLen > promptLen ? fullLen - promptLen : 0;
         Mat output(1, static_cast<int>(newLen), CV_32S,
                    const_cast<int32_t*>(fullPtr + promptLen));
-        oga_image_mat.release();
+        oga_image_path.clear();
         oga_raw_prompt.clear();
         return {output};
     }
@@ -333,6 +330,11 @@ std::vector<Mat> Net::Impl::runOgaSession(const std::vector<Mat>& inputBlobs)
     Mat output(1, static_cast<int>(newLen), CV_32S,
                    const_cast<int32_t*>(fullPtr + promptLen));
     return {output};
+}
+
+void Net::Impl::setInputImagePath(const String& path)
+{
+    oga_image_path = path;
 }
 
 void Net::Impl::setPrompt(const String& prompt)
@@ -810,7 +812,7 @@ void Net::Impl::forwardMainGraph(InputArrayOfArrays inputs, OutputArrayOfArrays 
     if (this->oga_model)
     {
         bool hasBlobs = netInputLayer && !netInputLayer->blobs.empty();
-        bool hasVlm = !oga_image_mat.empty() && !oga_raw_prompt.empty();
+        bool hasVlm = !oga_image_path.empty() && !oga_raw_prompt.empty();
 
         if (!hasBlobs && !hasVlm)
             CV_Error(Error::StsError, "DNN/OGA: No input data found. Call net.setInput() before forward().");
@@ -904,7 +906,7 @@ Mat Net::Impl::forwardWithSingleOutput(const std::string& outname)
     if (this->oga_model)
     {
         bool hasBlobs = netInputLayer && !netInputLayer->blobs.empty();
-        bool hasVlm = !oga_image_mat.empty() && !oga_raw_prompt.empty();
+        bool hasVlm = !oga_image_path.empty() && !oga_raw_prompt.empty();
 
         if (!hasBlobs && !hasVlm)
             CV_Error(Error::StsError, "DNN/OGA: No input data found");
@@ -963,7 +965,7 @@ void Net::Impl::forwardWithMultipleOutputs(OutputArrayOfArrays outblobs, const s
     if (this->oga_model)
     {
         bool hasBlobs = netInputLayer && !netInputLayer->blobs.empty();
-        bool hasVlm = !oga_image_mat.empty() && !oga_raw_prompt.empty();
+        bool hasVlm = !oga_image_path.empty() && !oga_raw_prompt.empty();
 
         if (!hasBlobs && !hasVlm)
             CV_Error(Error::StsError, "DNN/OGA: No input data found");
@@ -1175,10 +1177,7 @@ void Net::Impl::setMainGraphInput(InputArray m, const std::string& inpname)
         }
 
         if (inpname == "image")
-        {
-            oga_image_mat = m.getMat().clone();
-            return;
-        }
+            CV_Error(Error::StsBadArg, "DNN/OGA: Use net.setInputImagePath() for VLM image input.");
 
         Mat inputMat = m.getMat();
         if (inputMat.empty())
