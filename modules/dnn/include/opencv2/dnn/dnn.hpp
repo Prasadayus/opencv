@@ -2169,7 +2169,6 @@ public:
     CV_WRAP std::vector<int> encode(const std::string& text);
 
     CV_WRAP std::string decode(const std::vector<int>& tokens);
-
     struct Impl;
     explicit Tokenizer(const Ptr<Impl>& impl) : impl_(impl) {}
 private:
