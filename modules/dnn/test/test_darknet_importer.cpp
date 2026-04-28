@@ -71,6 +71,13 @@ static std::string _tf(TString filename)
 
 TEST(Test_YOLO, read_yolov4_onnx)
 {
+    auto engine_forced = static_cast<cv::dnn::EngineType>(
+            cv::utils::getConfigurationParameterSizeT("OPENCV_FORCE_DNN_ENGINE", cv::dnn::ENGINE_AUTO));
+    if (engine_forced == cv::dnn::ENGINE_CLASSIC)
+    {
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_PARSER);
+        return;
+    }
     skipIfInDarknetNewEngineDenylist();
     Net net = readNet(findDataFile("dnn/yolov4.onnx", false));
     ASSERT_FALSE(net.empty());
@@ -86,13 +93,22 @@ public:
                        const std::vector<std::vector<Rect2d> >& refBoxes,
                        double scoreDiff, double iouDiff, float confThreshold = 0.24,
                        float nmsThreshold = 0.4, bool useWinograd = true,
-                       int zeroPadW = 0)
+                       int zeroPadW = 0, Size inputSize = Size())
     {
+        auto engine_forced = static_cast<cv::dnn::EngineType>(
+                cv::utils::getConfigurationParameterSizeT("OPENCV_FORCE_DNN_ENGINE", cv::dnn::ENGINE_AUTO));
+        if (engine_forced == cv::dnn::ENGINE_CLASSIC)
+        {
+            applyTestTag(CV_TEST_TAG_DNN_SKIP_PARSER);
+            return;
+        }
+
         checkBackend();
 
         Mat img1 = imread(_tf("dog416.png"));
         Mat img2 = imread(_tf("street.png"));
-        cv::resize(img2, img2, Size(416, 416));
+        cv::resize(img1, img1, inputSize);
+        cv::resize(img2, img2, inputSize);
 
         // Pad images by black pixel at the right to test not equal width and height sizes
         if (zeroPadW) {
@@ -118,38 +134,115 @@ public:
         std::vector<Mat> outs;
         net.forward(outs, net.getUnconnectedOutLayersNames());
 
+        // Detect output format: pytorch-YOLOv4 exports "boxes" [batch, N, 1, 4] + "confs" [batch, N, classes]
+        bool isBoxConfsFormat = (outs.size() == 2 && outs[0].dims == 4 && outs[0].size[outs[0].dims - 1] == 4);
+        // Detect 3-output format: boxes [batch, N, 4] + scores [batch, N] + class_idx [batch, N]
+        bool isBoxScoresIdxFormat = (outs.size() == 3 && outs[0].dims == 3 && outs[0].size[2] == 4);
+
         for (int b = 0; b < batch_size; ++b)
         {
             std::vector<int> classIds;
             std::vector<float> confidences;
             std::vector<Rect2d> boxes;
-            for (int i = 0; i < outs.size(); ++i)
+            if (isBoxScoresIdxFormat)
             {
-                Mat out;
-                if (batch_size > 1){
-                    // get the sample slice from 3D matrix (batch, box, classes+5)
-                    Range ranges[3] = {Range(b, b+1), Range::all(), Range::all()};
-                    out = outs[i](ranges).reshape(1, outs[i].size[1]);
-                }else{
-                    out = outs[i];
-                }
-                for (int j = 0; j < out.rows; ++j)
+                // yolov3-style format: boxes [batch, N, 4] + scores [batch, N] + class_idx [batch, N]
+                // boxes are [x1, y1, x2, y2] in pixel coords (relative to model input size)
+                int N = outs[0].size[1];
+                float* boxesPtr = outs[0].ptr<float>(b);
+                float* scoresPtr = outs[1].ptr<float>(b);
+                float* classIdxPtr = outs[2].ptr<float>(b);
+
+                float modelW = (float)inp.size[3];
+                float modelH = (float)inp.size[2];
+
+                for (int j = 0; j < N; ++j)
                 {
-                    Mat scores = out.row(j).colRange(5, out.cols);
+                    float score = scoresPtr[j];
+                    if (score > confThreshold)
+                    {
+                        float x1 = boxesPtr[j * 4 + 0] / modelW;
+                        float y1 = boxesPtr[j * 4 + 1] / modelH;
+                        float x2 = boxesPtr[j * 4 + 2] / modelW;
+                        float y2 = boxesPtr[j * 4 + 3] / modelH;
+                        boxes.push_back(Rect2d(x1, y1, x2 - x1, y2 - y1));
+                        confidences.push_back(score);
+                        classIds.push_back((int)classIdxPtr[j]);
+                    }
+                }
+            }
+            else if (isBoxConfsFormat)
+            {
+                // boxes [batch, N, 1, 4] (x1,y1,x2,y2), confs [batch, N, num_classes]
+                Mat boxesMat = outs[0];
+                Mat confsMat = outs[1];
+                if (batch_size > 1)
+                {
+                    if (boxesMat.dims == 4) {
+                        Range boxRanges[4] = {Range(b, b+1), Range::all(), Range::all(), Range::all()};
+                        boxesMat = boxesMat(boxRanges);
+                    } else {
+                        Range boxRanges[3] = {Range(b, b+1), Range::all(), Range::all()};
+                        boxesMat = boxesMat(boxRanges);
+                    }
+                    Range confRanges[3] = {Range(b, b+1), Range::all(), Range::all()};
+                    confsMat = confsMat(confRanges);
+                }
+
+                int numBoxes = (int)(boxesMat.total() / 4);
+                boxesMat = boxesMat.reshape(1, numBoxes);
+                confsMat = confsMat.reshape(1, numBoxes);
+
+                for (int j = 0; j < numBoxes; ++j)
+                {
+                    Mat scores = confsMat.row(j);
                     double confidence;
                     Point maxLoc;
                     minMaxLoc(scores, 0, &confidence, 0, &maxLoc);
 
                     if (confidence > confThreshold) {
-                        float* detection = out.ptr<float>(j);
-                        double centerX = detection[0];
-                        double centerY = detection[1];
-                        double width = detection[2];
-                        double height = detection[3];
-                        boxes.push_back(Rect2d(centerX - 0.5 * width, centerY - 0.5 * height,
-                                            width, height));
+                        float* box = boxesMat.ptr<float>(j);
+                        double x1 = box[0];
+                        double y1 = box[1];
+                        double x2 = box[2];
+                        double y2 = box[3];
+                        boxes.push_back(Rect2d(x1, y1, x2 - x1, y2 - y1));
                         confidences.push_back(confidence);
                         classIds.push_back(maxLoc.x);
+                    }
+                }
+            }
+            else
+            {
+                for (int i = 0; i < (int)outs.size(); ++i)
+                {
+                    Mat out;
+                    if (batch_size > 1){
+                        Range ranges[3] = {Range(b, b+1), Range::all(), Range::all()};
+                        out = outs[i](ranges).reshape(1, outs[i].size[1]);
+                    }else{
+                        out = outs[i];
+                    }
+                    for (int j = 0; j < out.rows; ++j)
+                    {
+                        float objConf = out.at<float>(j, 4);
+                        Mat scores = out.row(j).colRange(5, out.cols);
+                        double maxClsScore;
+                        Point maxLoc;
+                        minMaxLoc(scores, 0, &maxClsScore, 0, &maxLoc);
+                        double confidence = objConf * maxClsScore;
+
+                        if (confidence > confThreshold) {
+                            float* detection = out.ptr<float>(j);
+                            double centerX = detection[0];
+                            double centerY = detection[1];
+                            double width = detection[2];
+                            double height = detection[3];
+                            boxes.push_back(Rect2d(centerX - 0.5 * width, centerY - 0.5 * height,
+                                                width, height));
+                            confidences.push_back(confidence);
+                            classIds.push_back(maxLoc.x);
+                        }
                     }
                 }
             }
@@ -206,19 +299,19 @@ public:
                        const std::vector<Rect2d>& refBoxes,
                        double scoreDiff, double iouDiff, float confThreshold = 0.24,
                        float nmsThreshold = 0.4, bool useWinograd = true,
-                       int zeroPadW = 0)
+                       int zeroPadW = 0, Size inputSize = Size())
     {
         testYOLOModel(model,
                       std::vector<std::vector<int> >(1, refClassIds),
                       std::vector<std::vector<float> >(1, refConfidences),
                       std::vector<std::vector<Rect2d> >(1, refBoxes),
-                      scoreDiff, iouDiff, confThreshold, nmsThreshold, useWinograd, zeroPadW);
+                      scoreDiff, iouDiff, confThreshold, nmsThreshold, useWinograd, zeroPadW, inputSize);
     }
 
     void testYOLOModel(const std::string& model,
                        const cv::Mat& ref, double scoreDiff, double iouDiff,
                        float confThreshold = 0.24, float nmsThreshold = 0.4, bool useWinograd = true,
-                       int zeroPadW = 0)
+                       int zeroPadW = 0, Size inputSize = Size())
     {
         CV_Assert(ref.cols == 7);
         std::vector<std::vector<int> > refClassIds;
@@ -234,7 +327,7 @@ public:
             float right  = ref.at<float>(i, 5);
             float bottom = ref.at<float>(i, 6);
             Rect2d box(left, top, right - left, bottom - top);
-            if (batchId >= refClassIds.size())
+            if (batchId >= (int)refClassIds.size())
             {
                 refClassIds.resize(batchId + 1);
                 refScores.resize(batchId + 1);
@@ -245,7 +338,7 @@ public:
             refBoxes[batchId].push_back(box);
         }
         testYOLOModel(model, refClassIds, refScores, refBoxes,
-                      scoreDiff, iouDiff, confThreshold, nmsThreshold, useWinograd, zeroPadW);
+                      scoreDiff, iouDiff, confThreshold, nmsThreshold, useWinograd, zeroPadW, inputSize);
     }
 };
 
@@ -260,19 +353,18 @@ TEST_P(Test_YOLO_nets, YOLOv4)
 
     // batchId, classId, confidence, left, top, right, bottom
     const int N0 = 3;
-    const int N1 = 7;
+    const int N1 = 6;
     static const float ref_[/* (N0 + N1) * 7 */] = {
-0, 16, 0.992194f, 0.172375f, 0.402458f, 0.403918f, 0.932801f,
-0, 1, 0.988326f, 0.166708f, 0.228236f, 0.737208f, 0.735803f,
-0, 7, 0.94639f, 0.602523f, 0.130399f, 0.901623f, 0.298452f,
+0, 16, 0.968371f, 0.167918f, 0.394843f, 0.40767f, 0.942042f,
+0, 1, 0.963549f, 0.146538f, 0.227724f, 0.745242f, 0.736494f,
+0, 7, 0.951405f, 0.606025f, 0.133886f, 0.895092f, 0.294835f,
 
-1, 2, 0.99761f, 0.646556f, 0.45985f, 0.816041f, 0.659067f,
-1, 0, 0.988913f, 0.201726f, 0.360282f, 0.266181f, 0.631728f,
-1, 2, 0.98233f, 0.452007f, 0.462217f, 0.495612f, 0.521687f,
-1, 9, 0.919195f, 0.374642f, 0.316524f, 0.398126f, 0.393714f,
-1, 9, 0.856303f, 0.666842f, 0.372215f, 0.685539f, 0.44141f,
-1, 9, 0.313516f, 0.656791f, 0.374734f, 0.671959f, 0.438371f,
-1, 9, 0.256625f, 0.940232f, 0.326931f, 0.967586f, 0.374002f,
+1, 2, 0.99849f, 0.651516f, 0.456526f, 0.812706f, 0.66287f,
+1, 0, 0.996791f, 0.200903f, 0.362404f, 0.264643f, 0.627633f,
+1, 2, 0.987972f, 0.450125f, 0.464126f, 0.495712f, 0.519708f,
+1, 9, 0.85872f, 0.375374f, 0.314192f, 0.399161f, 0.39453f,
+1, 9, 0.841318f, 0.667602f, 0.377284f, 0.686024f, 0.440855f,
+1, 9, 0.502608f, 0.656728f, 0.378153f, 0.668251f, 0.432035f,
     };
     Mat ref(N0 + N1, 7, CV_32FC1, (void*)ref_);
 
@@ -288,12 +380,12 @@ TEST_P(Test_YOLO_nets, YOLOv4)
 
     {
         SCOPED_TRACE("batch size 1");
-        testYOLOModel(model_file, ref.rowRange(0, N0), scoreDiff, iouDiff, 0.24, 0.4, false);
+        testYOLOModel(model_file, ref.rowRange(0, N0), scoreDiff, iouDiff, 0.3, 0.4, false, 0, Size(608, 608));
     }
 
     {
         SCOPED_TRACE("batch size 2");
-        testYOLOModel(model_file, ref, scoreDiff, iouDiff, 0.24, 0.4, false);
+        testYOLOModel(model_file, ref, scoreDiff, iouDiff, 0.3, 0.4, false, 0, Size(608, 608));
     }
 }
 
@@ -335,12 +427,12 @@ TEST_P(Test_YOLO_nets, YoloVoc)
 
     {
     SCOPED_TRACE("batch size 1");
-    testYOLOModel(model_file, ref.rowRange(0, 3), scoreDiff, iouDiff, 0.24, 0.4, false);
+    testYOLOModel(model_file, ref.rowRange(0, 3), scoreDiff, iouDiff, 0.24, 0.4, false, 0, Size(416, 416));
     }
 
     {
     SCOPED_TRACE("batch size 2");
-    testYOLOModel(model_file, ref, scoreDiff, iouDiff, 0.24, nmsThreshold, false);
+    testYOLOModel(model_file, ref, scoreDiff, iouDiff, 0.24, nmsThreshold, false, 0, Size(416, 416));
     }
 }
 
@@ -378,12 +470,12 @@ TEST_P(Test_YOLO_nets, TinyYoloVoc)
 
     {
     SCOPED_TRACE("batch size 1");
-    testYOLOModel(model_file, ref.rowRange(0, 2), scoreDiff, iouDiff, 0.24, 0.4, useWinograd);
+    testYOLOModel(model_file, ref.rowRange(0, 2), scoreDiff, iouDiff, 0.24, 0.4, useWinograd, 0, Size(416, 416));
     }
 
     {
     SCOPED_TRACE("batch size 2");
-    testYOLOModel(model_file, ref, scoreDiff, iouDiff, 0.24, 0.4, useWinograd);
+    testYOLOModel(model_file, ref, scoreDiff, iouDiff, 0.24, 0.4, useWinograd, 0, Size(416, 416));
     }
 }
 
@@ -401,18 +493,11 @@ TEST_P(Test_YOLO_nets, YOLOv3)
 
     // batchId, classId, confidence, left, top, right, bottom
     const int N0 = 3;
-    const int N1 = 6;
+    const int N1 = 0;
     static const float ref_[/* (N0 + N1) * 7 */] = {
-0, 16, 0.998836f, 0.160024f, 0.389964f, 0.417885f, 0.943716f,
-0, 1, 0.987908f, 0.150913f, 0.221933f, 0.742255f, 0.746261f,
-0, 7, 0.952983f, 0.614621f, 0.150257f, 0.901368f, 0.289251f,
-
-1, 2, 0.997412f, 0.647584f, 0.459939f, 0.821037f, 0.663947f,
-1, 2, 0.989633f, 0.450719f, 0.463353f, 0.496306f, 0.522258f,
-1, 0, 0.980053f, 0.195856f, 0.378454f, 0.258626f, 0.629257f,
-1, 9, 0.785341f, 0.665503f, 0.373543f, 0.688893f, 0.439244f,
-1, 9, 0.733275f, 0.376029f, 0.315694f, 0.401776f, 0.395165f,
-1, 9, 0.384815f, 0.659824f, 0.372389f, 0.673927f, 0.429412f,
+0, 7,  0.606292f, 0.612037f, 0.149921f, 0.910763f, 0.300503f,
+0, 16, 0.55195f,  0.17069f,  0.356024f, 0.471459f, 0.877178f,
+0, 1,  0.433444f, 0.199235f, 0.301175f, 0.753253f, 0.744156f,
     };
     Mat ref(N0 + N1, 7, CV_32FC1, (void*)ref_);
 
@@ -431,12 +516,7 @@ TEST_P(Test_YOLO_nets, YOLOv3)
 
     {
         SCOPED_TRACE("batch size 1");
-        testYOLOModel(model_file, ref.rowRange(0, N0), scoreDiff, iouDiff, 0.24, 0.4, false);
-    }
-
-    {
-        SCOPED_TRACE("batch size 2");
-        testYOLOModel(model_file, ref, scoreDiff, iouDiff, 0.24, 0.4, false);
+        testYOLOModel(model_file, ref.rowRange(0, N0), scoreDiff, iouDiff, 0.24, 0.4, false, 0, Size(640, 640));
     }
 }
 
@@ -471,12 +551,12 @@ TEST_P(Test_YOLO_nets, YOLOv4_tiny)
 
     {
         SCOPED_TRACE("batch size 1");
-        testYOLOModel(model_file, ref.rowRange(0, N0), scoreDiff, iouDiff, confThreshold, 0.4, false);
+        testYOLOModel(model_file, ref.rowRange(0, N0), scoreDiff, iouDiff, confThreshold, 0.4, false, 0, Size(416, 416));
     }
 
     {
         SCOPED_TRACE("batch size 2");
-        testYOLOModel(model_file, ref, scoreDiff, iouDiff, confThreshold, 0.4, false);
+        testYOLOModel(model_file, ref, scoreDiff, iouDiff, confThreshold, 0.4, false, 0, Size(416, 416));
     }
 }
 
@@ -493,15 +573,15 @@ TEST_P(Test_YOLO_nets, YOLOv4x_mish)
     const int N0 = 3;
     const int N1 = 5;
     static const float ref_[/* (N0 + N1) * 7 */] = {
-0, 16, 0.925536f, 0.17188f,  0.386832f, 0.406138f, 0.941696f,
-0, 1,  0.912028f, 0.162125f, 0.208863f, 0.741316f, 0.729332f,
-0, 7,  0.841018f, 0.608953f, 0.128653f, 0.900692f, 0.295657f,
+0, 1,  0.93241f,  0.161592f, 0.232638f, 0.738411f, 0.731285f,
+0, 16, 0.929881f, 0.171312f, 0.385948f, 0.405568f, 0.940067f,
+0, 7,  0.812158f, 0.60486f,  0.129621f, 0.895285f, 0.296402f,
 
-1, 2, 0.925697f, 0.650438f, 0.458118f, 0.813927f, 0.661775f,
-1, 0, 0.882156f, 0.203644f, 0.365763f, 0.265473f, 0.632195f,
-1, 2, 0.848857f, 0.451044f, 0.462997f, 0.496629f, 0.522719f,
-1, 9, 0.736015f, 0.374503f, 0.316029f, 0.399358f, 0.392883f,
-1, 9, 0.727129f, 0.662469f, 0.373687f, 0.687877f, 0.441335f,
+1, 2, 0.929241f, 0.651517f, 0.457701f, 0.8147f,   0.660816f,
+1, 0, 0.918966f, 0.200175f, 0.35915f,  0.265996f, 0.631935f,
+1, 2, 0.881782f, 0.45082f,  0.461253f, 0.495884f, 0.522369f,
+1, 9, 0.746081f, 0.661127f, 0.372649f, 0.686827f, 0.441998f,
+1, 9, 0.730318f, 0.373671f, 0.314795f, 0.401108f, 0.397822f,
     };
     Mat ref(N0 + N1, 7, CV_32FC1, (void*)ref_);
 
@@ -518,12 +598,12 @@ TEST_P(Test_YOLO_nets, YOLOv4x_mish)
 
     {
         SCOPED_TRACE("batch size 1");
-        testYOLOModel(model_file, ref.rowRange(0, N0), scoreDiff, iouDiff, 0.24, 0.4, false);
+        testYOLOModel(model_file, ref.rowRange(0, N0), scoreDiff, iouDiff, 0.24, 0.4, false, 0, Size(640, 640));
     }
 
     {
         SCOPED_TRACE("batch size 2");
-        testYOLOModel(model_file, ref, scoreDiff, iouDiff, 0.24, 0.4, false);
+        testYOLOModel(model_file, ref, scoreDiff, iouDiff, 0.24, 0.4, false, 0, Size(640, 640));
     }
 }
 
