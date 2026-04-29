@@ -2181,7 +2181,8 @@ private:
     enum TokenizerType
     {
         TOKENIZER_OPENCV_BPE = 0, //!< OpenCV built-in BPE tokenizer (GPT-2, GPT-4, Qwen 2.5 — auto-detected from config.json).
-        TOKENIZER_ORT_GENAI  = 1  //!< ORT GenAI tokenizer (requires build with WITH_ONNXRUNTIME=ON and WITH_ONNXRUNTIME_GENAI=ON).
+        TOKENIZER_OPENCV_GEMMA = 1, //!< OpenCV built-in Gemma tokenizer (Gemma3 — character-level BPE).
+        TOKENIZER_ORT_GENAI  = 2  //!< ORT GenAI tokenizer (requires build with WITH_ONNXRUNTIME=ON and WITH_ONNXRUNTIME_GENAI=ON).
     };
 
     /** @brief High-level class for Large Language Model inference and tokenization.
