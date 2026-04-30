@@ -275,6 +275,32 @@ std::vector<Mat> Net::Impl::runOrtSession(std::vector<Mat> inputBlobs, const std
 #endif
 
 #ifdef HAVE_ONNXRUNTIME_GENAI
+void Net::Impl::initOgaModel()
+{
+    if (oga_initialized)
+        return;
+    CV_Assert(!oga_model_dir.empty());
+
+    auto config = OgaConfig::Create(oga_model_dir.c_str());
+
+    if (IS_DNN_CUDA_TARGET(preferableTarget))
+    {
+        config->ClearProviders();
+        config->AppendProvider("cuda");
+    }
+
+    oga_model = std::shared_ptr<OgaModel>(
+        OgaModel::Create(*config).release(),
+        [](OgaModel* p) { OgaDestroyModel(p); });
+
+    oga_tokenizer = std::shared_ptr<OgaTokenizer>(
+        OgaTokenizer::Create(*oga_model).release(),
+        [](OgaTokenizer* p) { OgaDestroyTokenizer(p); });
+
+    oga_initialized = true;
+    CV_LOG_INFO(NULL, "DNN/OGA: Initialized model from " << oga_model_dir);
+}
+
 void Net::Impl::initOgaMultiModalProcessor()
 {
     if (oga_processor)
@@ -298,6 +324,7 @@ void Net::Impl::initOgaMultiModalProcessor()
 
 std::vector<Mat> Net::Impl::runOgaSession(const std::vector<Mat>& inputBlobs)
 {
+    initOgaModel();
     CV_Assert(this->oga_model);
 
     if (!oga_image_path.empty() && !oga_raw_prompt.empty())

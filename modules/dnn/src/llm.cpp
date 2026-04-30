@@ -38,6 +38,7 @@ struct OgaTokenizerImpl : public Tokenizer::Impl {
 
     std::vector<int> encode(const std::string& text) override
     {
+        ni->initOgaModel();
         CV_Assert(ni->oga_tokenizer);
         auto sequences = OgaSequences::Create();
         ni->oga_tokenizer->Encode(text.c_str(), *sequences);
@@ -48,6 +49,7 @@ struct OgaTokenizerImpl : public Tokenizer::Impl {
 
     std::string decode(const std::vector<int>& tokens) override
     {
+        ni->initOgaModel();
         if (ni->oga_processor)
         {
             const char* outStr = nullptr;
@@ -87,7 +89,7 @@ LLM::LLM() : impl_(makePtr<LLM::Impl>()) {}
 LLM::~LLM() {}
 
 LLM LLM::create(const String& modelPath, int tokenizerType,
-                 const String& tokenizerConfigPath, int engine)
+                 const String& tokenizerConfigPath, int engine, int targetId)
 {
     LLM llm;
 
@@ -101,11 +103,13 @@ LLM LLM::create(const String& modelPath, int tokenizerType,
         {
             llm.impl_->tokenizer_ = Tokenizer::load(tokenizerConfigPath);
             llm.impl_->net_ = readNetFromONNX(modelPath, engine);
+            llm.impl_->net_.setPreferableTarget(targetId);
         }
     }
     else if (tokenizerType == TOKENIZER_ORT_GENAI)
     {
         llm.impl_->net_ = readNetFromONNX(modelPath, ENGINE_ORT_GENAI);
+        llm.impl_->net_.setPreferableTarget(targetId);
 #ifdef HAVE_ONNXRUNTIME_GENAI
         llm.impl_->tokenizer_ = Tokenizer(Ptr<Tokenizer::Impl>(new OgaTokenizerImpl(llm.impl_->net_.getImpl())));
 #endif
@@ -164,6 +168,7 @@ String LLM::applyChatTemplate(const String& messages, const String& templateStr,
 {
     CV_Assert(impl_);
     auto* ni = impl_->net_.getImpl();
+    ni->initOgaModel();
     CV_Assert(ni->oga_tokenizer);
     const char* tmpl = templateStr.empty() ? nullptr : templateStr.c_str();
     const char* tls  = tools.empty()       ? nullptr : tools.c_str();
@@ -175,6 +180,7 @@ String LLM::getModelType() const
 {
     CV_Assert(impl_);
     auto* ni = impl_->net_.getImpl();
+    ni->initOgaModel();
     CV_Assert(ni->oga_model);
     OgaString t = ni->oga_model->GetType();
     return String(t.p_);
@@ -184,6 +190,12 @@ String LLM::getDeviceType() const
 {
     CV_Assert(impl_);
     auto* ni = impl_->net_.getImpl();
+    if (!ni->oga_initialized)
+    {
+        if (IS_DNN_CUDA_TARGET(ni->preferableTarget))
+            return "cuda";
+        return "cpu";
+    }
     CV_Assert(ni->oga_model);
     OgaString t = ni->oga_model->GetDeviceType();
     return String(t.p_);

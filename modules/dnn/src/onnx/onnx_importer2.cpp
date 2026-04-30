@@ -2667,18 +2667,12 @@ Net readNetFromONNX2_OGA(const String& modelDir)
         Net net;
         auto impl = net.getImpl();
 
-        impl->oga_model = std::shared_ptr<OgaModel>(
-            OgaModel::Create(modelDir.c_str()).release(),
-            [](OgaModel* p) { OgaDestroyModel(p); });
-        impl->oga_tokenizer = std::shared_ptr<OgaTokenizer>(
-            OgaTokenizer::Create(*impl->oga_model).release(),
-            [](OgaTokenizer* p) { OgaDestroyTokenizer(p); });
-
+        impl->oga_model_dir = modelDir;
         impl->modelFileName = modelDir;
         impl->modelFormat   = DNN_MODEL_ONNX;
         impl->newGraph("oga_session_active", {}, true);
 
-        CV_LOG_INFO(NULL, "DNN/ONNX: Successfully initialized OGA model for " << modelDir);
+        CV_LOG_INFO(NULL, "DNN/ONNX: Registered OGA model from " << modelDir);
         return net;
     }
     catch (const std::exception& e)

@@ -27,7 +27,8 @@ Build OpenCV with:
 
 To run:
     ./example_dnn_llm_inference --tokenizer_type=ort_genai --model=/path/to/ort_genai_model_dir \
-        --prompt="What is OpenCV?" --max_new_tokens=100
+        --device=cpu --prompt="What is OpenCV?" --max_new_tokens=100
+    (use --device=cuda with a GPU-enabled build and a GPU-built OGA model)
 
 === GPT-2 with OpenCV BPE tokenizer ===
 
@@ -97,10 +98,10 @@ using namespace std;
 //
 // ORT-GenAI path: uses OGA tokenizer + single run() call for full generation.
 //
-void runOrtGenAI(const string& modelPath, const string& userPrompt, int maxNewTokens)
+static void runOrtGenAI(const string& modelPath, const string& userPrompt, int maxNewTokens, int targetId)
 {
-    // 1. Create LLM with ORT-GenAI tokenizer
-    LLM llm = LLM::create(modelPath, TOKENIZER_ORT_GENAI);
+    // 1. Create LLM with ORT-GenAI tokenizer and target (CPU or CUDA)
+    LLM llm = LLM::create(modelPath, TOKENIZER_ORT_GENAI, "", ENGINE_NEW, targetId);
     Tokenizer tokenizer = llm.getTokenizer();
 
     cout << "Model type  : " << llm.getModelType()  << endl;
@@ -124,7 +125,7 @@ void runOrtGenAI(const string& modelPath, const string& userPrompt, int maxNewTo
 //
 // GPT-2 path: uses OpenCV BPE tokenizer + autoregressive greedy decoding loop.
 //
-void runGpt2(const string& modelPath, const string& tokenizerCfg,
+static void runGpt2(const string& modelPath, const string& tokenizerCfg,
              const string& userPrompt, int maxSeqLen)
 {
     // 1. Create LLM with OpenCV BPE tokenizer
@@ -160,7 +161,7 @@ void runGpt2(const string& modelPath, const string& tokenizerCfg,
 // Qwen2.5 path: uses OpenCV BPE tokenizer + autoregressive greedy decoding loop
 // with multiple named inputs (input_ids, attention_mask, position_ids).
 //
-void runQwen(const string& modelPath, const string& tokenizerCfg,
+static void runQwen(const string& modelPath, const string& tokenizerCfg,
              const string& userPrompt, int maxNewTokens)
 {
     // 1. Create LLM with OpenCV BPE tokenizer and ENGINE_NEW
@@ -291,7 +292,8 @@ const string param_keys =
     "{ tokenizer      t  |                  | Path to tokenizer config.json (required for gpt2/qwen/gemma3). }"
     "{ prompt         p  | What is OpenCV?  | User prompt text. }"
     "{ max_new_tokens    | 100              | Maximum number of new tokens to generate (ort_genai/qwen/gemma3). }"
-    "{ max_seq_len       | 32               | Number of tokens to continue (gpt2 only). }";
+    "{ max_seq_len       | 32               | Number of tokens to continue (gpt2 only). }"
+    "{ device         d  | cpu              | Inference device: cpu or cuda (ort_genai only). }";
 
 int main(int argc, char** argv)
 {
@@ -309,6 +311,7 @@ int main(int argc, char** argv)
     const string userPrompt    = parser.get<String>("prompt");
     const int    maxNewTokens  = parser.get<int>("max_new_tokens");
     const int    maxSeqLen     = parser.get<int>("max_seq_len");
+    const string device        = parser.get<String>("device");
 
     if (!parser.check())
     {
@@ -316,9 +319,11 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    int target = (device == "cuda") ? DNN_TARGET_CUDA : DNN_TARGET_CPU;
+
     if (tokenizerType == "ort_genai")
     {
-        runOrtGenAI(modelPath, userPrompt, maxNewTokens);
+        runOrtGenAI(modelPath, userPrompt, maxNewTokens, target);
     }
     else if (tokenizerType == "gpt2")
     {

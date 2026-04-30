@@ -2202,11 +2202,13 @@ private:
          *  @param tokenizerConfigPath  Optional separate path to tokenizer config.json. When provided with TOKENIZER_OPENCV_BPE,
          *  modelPath is used for the model and tokenizerConfigPath for the tokenizer.
          *  @param engine  Engine type for inference. Only needed for ORT GenAI. @see EngineType
+         *  @param targetId  Preferable target for inference (e.g. DNN_TARGET_CPU, DNN_TARGET_CUDA). @see Target
          */
         CV_WRAP static LLM create(CV_WRAP_FILE_PATH const String& modelPath,
                                    int tokenizerType = TOKENIZER_ORT_GENAI,
                                    CV_WRAP_FILE_PATH const String& tokenizerConfigPath = String(),
-                                   int engine = ENGINE_NEW);
+                                   int engine = ENGINE_NEW,
+                                   int targetId = DNN_TARGET_CPU);
 
         /** @brief Get the tokenizer associated with this LLM instance.
          *  @return Tokenizer object that can encode/decode text.

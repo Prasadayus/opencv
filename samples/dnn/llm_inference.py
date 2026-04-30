@@ -27,7 +27,8 @@ Build OpenCV with:
 
 To run:
     python llm_inference.py --tokenizer_type=ort_genai --model=/path/to/ort_genai_model_dir \
-        --prompt="What is OpenCV?" --max_new_tokens=100
+        --device=cpu --prompt="What is OpenCV?" --max_new_tokens=100
+    (use --device=cuda with a GPU-enabled build and a GPU-built OGA model)
 
 === GPT-2 with OpenCV BPE tokenizer ===
 
@@ -92,11 +93,11 @@ import argparse
 import cv2 as cv
 
 
-def run_ort_genai(model_path, user_prompt, max_new_tokens):
+def run_ort_genai(model_path, user_prompt, max_new_tokens, target_id):
     '''ORT-GenAI path: uses OGA tokenizer + single run() call for full generation.'''
 
-    # 1. Create LLM with ORT-GenAI tokenizer
-    llm = cv.dnn.LLM.create(model_path, cv.dnn.TOKENIZER_ORT_GENAI)
+    # 1. Create LLM with ORT-GenAI tokenizer and target (CPU or CUDA)
+    llm = cv.dnn.LLM.create(model_path, cv.dnn.TOKENIZER_ORT_GENAI, '', cv.dnn.ENGINE_NEW, target_id)
     tokenizer = llm.getTokenizer()
 
     print(f"Model type  : {llm.getModelType()}")
@@ -222,14 +223,18 @@ def parse_args():
     parser.add_argument('--prompt', type=str, default='What is OpenCV?', help='User prompt text.')
     parser.add_argument('--max_new_tokens', type=int, default=100, help='Maximum number of new tokens to generate (ort_genai/qwen/gemma3).')
     parser.add_argument('--max_seq_len', type=int, default=32, help='Number of tokens to continue (gpt2 only).')
+    parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda'],
+                        help='Inference device: cpu or cuda (ort_genai only).')
     return parser.parse_args()
 
 
 if __name__ == '__main__':
     args = parse_args()
 
+    target_id = cv.dnn.DNN_TARGET_CUDA if args.device == 'cuda' else cv.dnn.DNN_TARGET_CPU
+
     if args.tokenizer_type == 'ort_genai':
-        run_ort_genai(args.model, args.prompt, args.max_new_tokens)
+        run_ort_genai(args.model, args.prompt, args.max_new_tokens, target_id)
 
     elif args.tokenizer_type == 'gpt2':
         if not args.tokenizer:

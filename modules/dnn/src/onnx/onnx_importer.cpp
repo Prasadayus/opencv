@@ -4190,7 +4190,7 @@ Net readNetFromONNX(const String& onnxFile, int engine)
             Net net = readNetFromONNX2_OGA(onnxFile);
             if (net.empty())
                 CV_Error(Error::StsError, "DNN/ONNX/OGA: failed to load model");
-            if (!net.getImpl() || !net.getImpl()->oga_model)
+            if (!net.getImpl() || net.getImpl()->oga_model_dir.empty())
                 CV_Error(Error::StsError, "DNN/ONNX/OGA: ONNX Runtime GenAI model was not initialized");
             return net;
 #else

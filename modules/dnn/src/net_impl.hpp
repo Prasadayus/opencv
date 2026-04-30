@@ -273,6 +273,8 @@ struct Net::Impl : public detail::NetImplBase
 #endif
 
 #ifdef HAVE_ONNXRUNTIME_GENAI
+    std::string oga_model_dir;
+    bool oga_initialized = false;
     std::shared_ptr<OgaModel> oga_model;
     std::shared_ptr<OgaTokenizer> oga_tokenizer;
     std::shared_ptr<OgaMultiModalProcessor> oga_processor;
@@ -440,6 +442,7 @@ struct Net::Impl : public detail::NetImplBase
     // @param inputBlobs  single 1-D CV_32S Mat containing the input token IDs.
     // @returns           single 1-D CV_32S Mat containing all generated token IDs
     //                   (including the prompt tokens).
+    void initOgaModel();
     void initOgaMultiModalProcessor();
     std::vector<Mat> runOgaSession(const std::vector<Mat>& inputBlobs);
 #endif
