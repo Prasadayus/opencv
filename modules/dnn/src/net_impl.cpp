@@ -89,6 +89,10 @@ bool Net::Impl::empty() const
 {
     if (mainGraph)
         return false;
+#ifdef HAVE_ONNXRUNTIME_GENAI
+    if (!oga_model_dir.empty())
+        return false;
+#endif
     return layers.size() <= 1;  // first layer is default Data layer
 }
 
@@ -991,6 +995,11 @@ Mat Net::Impl::forward(const String& outputName)
     CV_Assert(!empty());
     FPDenormalsIgnoreHintScope fp_denormals_ignore_scope;
 
+#ifdef HAVE_ONNXRUNTIME_GENAI
+    if (!oga_model_dir.empty())
+        return forwardWithSingleOutput(outputName);
+#endif
+
     if (mainGraph) {
         Mat result;
         forwardWithSingleOutput(outputName, result);
@@ -1049,6 +1058,14 @@ void Net::Impl::forward(OutputArrayOfArrays outputBlobs, const String& outputNam
 {
     CV_Assert(!empty());
     FPDenormalsIgnoreHintScope fp_denormals_ignore_scope;
+
+#ifdef HAVE_ONNXRUNTIME_GENAI
+    if (!oga_model_dir.empty())
+    {
+        forwardMainGraph(noArray(), outputBlobs);
+        return;
+    }
+#endif
 
     if (mainGraph) {
         if (!outputName.empty()) {
@@ -1553,6 +1570,15 @@ void Net::Impl::setInput(InputArray blob, const String& name, double scalefactor
 {
     FPDenormalsIgnoreHintScope fp_denormals_ignore_scope;
 
+#ifdef HAVE_ONNXRUNTIME_GENAI
+    if (!oga_model_dir.empty())
+    {
+        CV_Assert(scalefactor == 1);
+        CV_Assert(mean.val[0] == 0 && mean.val[1] == 0 && mean.val[2] == 0 && mean.val[3] == 0);
+        setMainGraphInput(blob, name);
+        return;
+    }
+#endif
     if (mainGraph) {
         CV_Assert(scalefactor == 1);
         CV_Assert(mean.val[0] == 0 && mean.val[1] == 0 && mean.val[2] == 0 && mean.val[3] == 0);
