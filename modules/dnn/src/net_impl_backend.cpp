@@ -329,6 +329,14 @@ void Net::Impl::setPreferableTarget(int targetId)
     }
 #endif
 
+#ifdef HAVE_ONNXRUNTIME_GENAI
+    if (!oga_model_dir.empty())
+    {
+        preferableTarget = IS_DNN_CUDA_TARGET(targetId) ? targetId : DNN_TARGET_CPU;
+        return;
+    }
+#endif
+
     if (mainGraph)
     {
         CV_LOG_WARNING(NULL, "Targets are not supported by the new graph engine for now");
