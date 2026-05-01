@@ -1562,7 +1562,7 @@ void ONNXImporter2::parseLoop(LayerParams& layerParams,
 void ONNXImporter2::parseIf(LayerParams& layerParams,
                             const opencv_onnx::NodeProto& node_proto)
 {
-    CV_Assert(node_proto.input_size() >= 1);
+    CV_Assert(node_proto.input_size() == 1);
     layerParams.type = "If";
 
     addLayer(layerParams, node_proto);

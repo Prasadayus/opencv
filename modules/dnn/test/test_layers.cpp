@@ -2864,6 +2864,42 @@ TEST(Layer_If, resize)
     }
 }
 
+TEST(Layer_If, invalid_multi_inputs)
+{
+    auto engine_forced = static_cast<cv::dnn::EngineType>(
+            cv::utils::getConfigurationParameterSizeT("OPENCV_FORCE_DNN_ENGINE", cv::dnn::ENGINE_AUTO));
+    if (engine_forced == cv::dnn::ENGINE_CLASSIC)
+    {
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_PARSER);
+        return;
+    }
+
+    // Spec-violating model: the `If` node has 2 inputs; ONNX
+    // schema allows exactly 1. The new parser must reject at load time; ORT
+    // defers session creation and rejects on the first forward().
+    const std::string modelname = findDataFile("dnn/onnx/models/if_layer_multi_inputs.onnx", true);
+
+    if (engine_forced == cv::dnn::ENGINE_ORT)
+    {
+        dnn::Net net = dnn::readNetFromONNX(modelname);
+        try
+        {
+            net.forward();
+            FAIL() << "ORT was expected to reject the spec-violating model";
+        }
+        catch (const std::exception& e)
+        {
+            const std::string msg(e.what());
+            EXPECT_NE(msg.find("input size 2"), std::string::npos) << msg;
+        }
+    }
+    else
+    {
+        dnn::Net net = dnn::readNetFromONNX(modelname, ENGINE_NEW);
+        EXPECT_TRUE(net.empty());
+    }
+}
+
 TEST(Layer_Size, onnx_1d)
 {
     auto engine_forced = static_cast<cv::dnn::EngineType>(
