@@ -211,7 +211,9 @@ void runQwen(const string& modelPath, const string& tokenizerCfg,
         }
         if (stop) break;
 
-        Mat newToken(1, 1, CV_64S, Scalar(static_cast<int64_t>(newId)));
+        Mat newToken;
+        newToken.create(1, 1, CV_64S);
+        newToken.at<int64_t>(0, 0) = newId;
         hconcat(tokens, newToken, tokens);
     }
 
@@ -273,7 +275,9 @@ static void runGemma3(const string& modelPath, const string& tokenizerCfg,
         }
         if (stop) break;
 
-        Mat newToken(1, 1, CV_64S, Scalar(static_cast<int64_t>(newId)));
+        Mat newToken;
+        newToken.create(1, 1, CV_64S);
+        newToken.at<int64_t>(0, 0) = newId;
         hconcat(tokens, newToken, tokens);
     }
 
