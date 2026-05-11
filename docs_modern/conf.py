@@ -11,14 +11,12 @@ release = "5.x"
 
 extensions = [
     "myst_parser",
-    "sphinx_design",
-    "sphinx_copybutton",
+    "tabs",
     "doxysnippet",
     "opencv_code_links",
+    "breathe",
+    "exhale",
 ]
-
-copybutton_prompt_text = r">>> |\.\.\. |\$ |# "
-copybutton_prompt_is_regexp = True
 
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
 
@@ -27,13 +25,9 @@ myst_enable_extensions = [
     "amsmath",
     "deflist",
     "colon_fence",
-    "attrs_inline",
-    "attrs_block",
     "fieldlist",
     "tasklist",
-    "linkify",
 ]
-myst_linkify_fuzzy_links = False
 myst_heading_anchors = 4
 myst_dmath_double_inline = True
 
@@ -49,18 +43,22 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
-html_css_files = ["custom.css"]
-html_js_files = ["opencv-code-links.js"]
+html_css_files = [
+    "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap",
+    "custom.css",
+]
+html_js_files = ["opencv-code-links.js", "copybutton.js", "theme-toggle.js"]
 html_title = "OpenCV Documentation"
 html_logo = "_static/opencv-logo-white.png"
 html_favicon = "_static/opencv.ico"
 html_show_sourcelink = False
 html_copy_source = False
+html_meta = {"opencv-code-links": "enable"}
 
 html_theme_options = {
     "navbar_start": ["navbar-logo", "version-badge"],
     "navbar_center": [],
-    "navbar_end": ["external-nav", "theme-switcher", "navbar-icon-links"],
+    "navbar_end": ["external-nav", "navbar-icon-links"],
     "navbar_persistent": ["search-button"],
     "header_links_before_dropdown": 7,
     "show_prev_next": True,
@@ -80,7 +78,7 @@ html_theme_options = {
         {
             "name": "GitHub",
             "url": "https://github.com/opencv/opencv",
-            "icon": "fa-brands fa-github",
+            "icon": "fab fa-github",
         },
     ],
     "logo": {
@@ -100,3 +98,18 @@ html_sidebars = {
 }
 
 suppress_warnings = ["myst.header"]
+
+breathe_projects = {
+    "OpenCV": os.path.join(os.path.dirname(__file__), "_build/doxygen/xml"),
+}
+breathe_default_project = "OpenCV"
+breathe_domain_by_extension = {"hpp": "cpp", "h": "cpp"}
+
+exhale_args = {
+    "containmentFolder":    "./api",
+    "rootFileName":         "library_root.rst",
+    "rootFileTitle":        "C++ API Reference",
+    "doxygenStripFromPath": os.path.join(os.path.dirname(__file__), ".."),
+    "createTreeView":       True,
+    "exhaleExecutesDoxygen": False,
+}

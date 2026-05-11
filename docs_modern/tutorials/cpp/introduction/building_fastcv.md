@@ -45,7 +45,7 @@ OpenCV and FastCV integration is implemented in two ways:
 
 ## Compiling OpenCV with FastCV for Android
 
-1. **Follow Wiki page for OpenCV Compilation** : https://github.com/opencv/opencv/wiki/Custom-OpenCV-Android-SDK-and-AAR-package-build
+1. **Follow Wiki page for OpenCV Compilation** : [https://github.com/opencv/opencv/wiki/Custom-OpenCV-Android-SDK-and-AAR-package-build](https://github.com/opencv/opencv/wiki/Custom-OpenCV-Android-SDK-and-AAR-package-build)
 
  Once the OpenCV repository code is cloned into the workspace, please add `-DWITH_FASTCV=ON` flag to cmake vars as below to arm64 entry
  in `opencv/platforms/android/default.config.py` or create new one with the option to enable FastCV HAL and/or extenstions compilation:

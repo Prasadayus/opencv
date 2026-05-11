@@ -18,11 +18,11 @@ below, feel free to contact us via our [OpenCV Q&A forum](https://forum.opencv.o
 best to help you out.
 
 :::{note}
-To use the OpenCV library you have two options: [Installation by Using the Pre-built Libraries](windows_install.md#tutorial-windows-install-prebuilt) or
-:::
-[Installation by Making Your Own Libraries from the Source Files](windows_install.md#tutorial-windows-install-build). While the first one is easier to complete, it only works if you are coding
+To use the OpenCV library you have two options: {ref}`Installation by Using the Pre-built Libraries <tutorial_windows_install_prebuilt>` or
+{ref}`Installation by Making Your Own Libraries from the Source Files <tutorial_windows_install_build>`. While the first one is easier to complete, it only works if you are coding
 with the latest Microsoft Visual Studio IDE and do not take advantage of the most advanced
-technologies we integrate into our library. .. _Windows_Install_Prebuild:
+technologies we integrate into our library.
+:::
 
 (tutorial_windows_install_prebuilt)=
 ### Installation by Using the Pre-built Libraries
@@ -34,7 +34,7 @@ Sourceforge](http://sourceforge.net/projects/opencvlibrary/files/).
 
 ![](images/OpenCV_Install_Directory.png)
 
-1. To finalize the installation go to the [Set the OpenCV environment variable and add it to the systems path](windows_install.md#tutorial-windows-install-path) section.
+1. To finalize the installation go to the {ref}`Set the OpenCV environment variable and add it to the systems path <tutorial_windows_install_path>` section.
 
 (tutorial_windows_gitbash_build)=
 ### Installation by Using git-bash (version>=2.14.1) and cmake (version >=3.9.1)
@@ -206,7 +206,7 @@ recommend creating a new one that has short path and no special characters in it
 you are doing -- it is OK.
     1. Clone the repository to the selected directory. After clicking *Clone* button, a window will
 appear where you can select from what repository you want to download source files
-(<https://github.com/opencv/opencv.git>) and to what directory (`D:/OpenCV`).
+(<[https://github.com/opencv/opencv.git](https://github.com/opencv/opencv.git)>) and to what directory (`D:/OpenCV`).
     1. Push the OK button and be patient as the repository is quite a heavy download. It will take
 some time depending on your Internet connection.
 
@@ -227,22 +227,20 @@ the [Intel Integrated Performance Primitives (*IPP*)](http://software.intel.com/
 the story is the same. For
 extracting the archives, I recommend using the [7-Zip](http://www.7-zip.org/) application.
 
-![](images/IntelTBB.png)
+   ![](images/IntelTBB.png)
 
-    1. In case of the [Eigen](http://eigen.tuxfamily.org/index.php?title=Main_Page#Download) library it is again a case of download and extract to the
-`D:/OpenCV/dep` directory.
-    1. Same as above with [OpenEXR](http://www.openexr.com/downloads.html).
-    1. For the [OpenNI Framework](http://www.openni.org/) you need to install both the [development
-build](http://www.openni.org/downloadfiles/opennimodules/openni-binaries/21-stable) and the
-[PrimeSensor
-Module](http://www.openni.org/downloadfiles/opennimodules/openni-compliant-hardware-binaries/32-stable).
-    1. For the CUDA you need again two modules: the latest [CUDA Toolkit](http://developer.nvidia.com/cuda-downloads) and the *CUDA Tools SDK*.
-Download and install both of them with a *complete* option by using the 32 or 64 bit setups
-according to your OS.
-    1. In case of the Qt framework you need to build yourself the binary files (unless you use the
-Microsoft Visual Studio 2008 with 32 bit compiler). To do this go to the [Qt
-Downloads](http://qt.nokia.com/downloads) page. Download the source files (not the
-installers!!!):
+   1. In case of the [Eigen](http://eigen.tuxfamily.org/index.php?title=Main_Page#Download) library it is again a case of download and extract to the
+      `D:/OpenCV/dep` directory.
+   1. Same as above with [OpenEXR](http://www.openexr.com/downloads.html).
+   1. For the [OpenNI Framework](http://www.openni.org/) you need to install both the
+      [development build](http://www.openni.org/downloadfiles/opennimodules/openni-binaries/21-stable) and the
+      [PrimeSensor Module](http://www.openni.org/downloadfiles/opennimodules/openni-compliant-hardware-binaries/32-stable).
+   1. For the CUDA you need again two modules: the latest [CUDA Toolkit](http://developer.nvidia.com/cuda-downloads) and the *CUDA Tools SDK*.
+      Download and install both of them with a *complete* option by using the 32 or 64 bit setups
+      according to your OS.
+   1. In case of the Qt framework you need to build yourself the binary files (unless you use the
+      Microsoft Visual Studio 2008 with 32 bit compiler). To do this go to the
+      [Qt Downloads](http://qt.nokia.com/downloads) page. Download the source files (not the installers!!!):
 
 ![](images/qtDownloadThisPackage.png)
 

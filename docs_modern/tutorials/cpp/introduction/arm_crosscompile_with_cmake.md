@@ -114,4 +114,4 @@ extensions.
 
 TBB is supported on multi core ARM SoCs also. Add -DWITH_TBB=ON and -DBUILD_TBB=ON to enable it.
 Cmake scripts download TBB sources from official project site
-<http://threadingbuildingblocks.org/> and build it.
+<[http://threadingbuildingblocks.org/](http://threadingbuildingblocks.org/)> and build it.

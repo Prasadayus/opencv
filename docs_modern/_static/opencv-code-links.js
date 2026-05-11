@@ -1,11 +1,29 @@
 (function () {
     "use strict";
 
+    const SKIP_JS = new Set([
+        "log","all","add","run","get","set","read","load","save","free","move",
+        "call","draw","name","size","type","init","any","has","fit","bind","swap",
+        "rows","cols","dims","step","kind","inv","cast","eval","meta","tag","fmt",
+        "feed","put","pop","push","top","end","begin","find","next","prev","back",
+        "at","do","if","for","new","try","int","std","cv","abs","max","min","exp",
+        "pow","sin","cos","tan","len","buf","ptr","ret","err","val","idx","pos",
+        "ref","del","hex","oct","dec","num","str","out","in","ok","no","yes","on",
+        "off","up","down","left","right","red","blue","cyan","gray","gold","lime",
+        "navy","pink","rose","teal","conj","lpi","priv","mov","rvec","warp","what",
+        "real","imag","data","rows","step","cols","dims","flags","elem","coef",
+        "norm","rank","sort","copy","fill","map","zip","sum","mean","var","std",
+        "merge","split","flip","clip","crop","resize","rotate","shift","scale",
+        "width","height","depth","channels","empty","total","reshape","clone",
+        "row","col","diag","dot","cross","mul","div","mod","neg","cmp","eq","ne",
+        "lt","le","gt","ge","and","or","not","xor","count","match","check","test",
+    ]);
+
     function linkifyCode(symbols) {
         // Pygments classes: .n (Name), .nc (Name.Class), .nf (Name.Function),
         // .nv (Name.Variable), .nb (Name.Builtin), .nx (Name.Other),
         // .nl (Name.Label), .na (Name.Attribute), .cpf (Comment.PreprocFile).
-        const SELECTOR = "pre .n, pre .nc, pre .nf, pre .nv, pre .nx, pre .nl, pre .na, pre .nb, pre .cpf";
+        const SELECTOR = "pre .nc, pre .nf, pre .cpf";
         const QUALIFIED_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
         const HEADER_RE = /^["<]?[\w./+-]+\.h(?:pp|h|xx)?[">]?$/;
 
@@ -14,6 +32,8 @@
             if (el.parentElement && el.parentElement.tagName === "A") return;
             const text = el.textContent.trim();
             if (!text) return;
+            if (SKIP_JS.has(text.toLowerCase())) return;
+            if (text.length < 4) return;
 
             // Header file paths inside #include (Pygments class "cpf").
             if (el.classList.contains("cpf") || HEADER_RE.test(text)) {
@@ -61,11 +81,6 @@
         });
     }
 
-    function isEnabled() {
-        const tag = document.querySelector('meta[name="opencv-code-links"]');
-        return tag && tag.getAttribute("content") === "enable";
-    }
-
     function symbolMapUrl() {
         if (document.currentScript && document.currentScript.src) {
             return document.currentScript.src.replace(/[^/]+$/, "opencv-symbols.json");
@@ -79,7 +94,6 @@
     }
 
     function init() {
-        if (!isEnabled()) return;
         fetch(symbolMapUrl())
             .then((r) => (r.ok ? r.json() : {}))
             .then(linkifyCode)

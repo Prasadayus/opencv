@@ -423,7 +423,7 @@ sudo apt install -y \
 :::{warning}
 If version of runtime libraries and/or programs are incremented, apt package names may be changed
 (e.g. `libswscale6` is used for Ubuntu 23.04, but `libswscale7` is used for Ubuntu 23.10).
-Looking for it with `apt search` command or https://packages.ubuntu.com/ .
+Looking for it with `apt search` command or [https://packages.ubuntu.com/](https://packages.ubuntu.com/) .
 External library version between host and target should be same.
 Please update to the latest version libraries at the same time as possible.
 

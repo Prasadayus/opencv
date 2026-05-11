@@ -144,7 +144,7 @@ The universal intrinsics set provides element wise binary and unary operations.
 
 :::{note}
 Since OpenCV 4.11, C++ operator overloading (e.g., +, ) in Universal Intrinsics has been deprecated in favor of explicit wrapper functions (e.g., v_add, v_mul) to ensure compatibility with VLA architectures.
-See also: https://github.com/opencv/opencv/issues/27267
+See also: [https://github.com/opencv/opencv/issues/27267](https://github.com/opencv/opencv/issues/27267)
 :::
 * **Arithmetics**: We can add, subtract, multiply and divide two registers element-wise. The registers must be of the same width and hold the same type. To multiply two registers, for example:
 

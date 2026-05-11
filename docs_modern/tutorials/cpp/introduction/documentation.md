@@ -783,12 +783,12 @@ References
 - [Command reference](http://www.doxygen.nl/manual/commands.html) - supported commands and their parameters
 
 <!-- invisible references list -->
-[Doxygen]: http://www.doxygen.nl
-[Doxygen download]: http://doxygen.nl/download.html
-[Doxygen installation]: http://doxygen.nl/manual/install.html
-[Documenting basics]: http://www.doxygen.nl/manual/docblocks.html
-[Markdown support]: http://www.doxygen.nl/manual/markdown.html
-[Formulas support]: http://www.doxygen.nl/manual/formulas.html
-[Supported formula commands]: http://docs.mathjax.org/en/latest/input/tex/macros/index.html
-[Command reference]: http://www.doxygen.nl/manual/commands.html
-[Google Scholar]: http://scholar.google.ru/
+[Doxygen]: [http://www.doxygen.nl](http://www.doxygen.nl)
+[Doxygen download]: [http://doxygen.nl/download.html](http://doxygen.nl/download.html)
+[Doxygen installation]: [http://doxygen.nl/manual/install.html](http://doxygen.nl/manual/install.html)
+[Documenting basics]: [http://www.doxygen.nl/manual/docblocks.html](http://www.doxygen.nl/manual/docblocks.html)
+[Markdown support]: [http://www.doxygen.nl/manual/markdown.html](http://www.doxygen.nl/manual/markdown.html)
+[Formulas support]: [http://www.doxygen.nl/manual/formulas.html](http://www.doxygen.nl/manual/formulas.html)
+[Supported formula commands]: [http://docs.mathjax.org/en/latest/input/tex/macros/index.html](http://docs.mathjax.org/en/latest/input/tex/macros/index.html)
+[Command reference]: [http://www.doxygen.nl/manual/commands.html](http://www.doxygen.nl/manual/commands.html)
+[Google Scholar]: [http://scholar.google.ru/](http://scholar.google.ru/)

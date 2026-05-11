@@ -46,7 +46,7 @@ Here's how to get a ready to work environment:
 
 1. Download and install Android Studio:
     * Ubuntu:
-        1. Download Android Studio: https://developer.android.com/studio
+        1. Download Android Studio: [https://developer.android.com/studio](https://developer.android.com/studio)
         2. Extract the tar.gz archive
         3. Follow the instructions in `Install-Linux-tar.txt`: open `android-studio/bin` folder in terminal and run `./studio.sh`
         4. Perform standard installation through GUI

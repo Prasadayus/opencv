@@ -47,7 +47,7 @@ For this guide, the focus is on using the git repositories. This is because the 
 Start with the `opencv` repository:
 
     # Clone the opencv repository locally:
-    $ git clone https://github.com/opencv/opencv.git
+    $ git clone [https://github.com/opencv/opencv.git](https://github.com/opencv/opencv.git)
 
 To build the 3.1.0 version (as opposed to building the most-recent source), you must check out a branch based on the `3.1.0` tag:
 
@@ -94,7 +94,7 @@ At this point, the `opencv` repository is ready for building.
 The `opencv_extra` repository contains extra data for the OpenCV library, including the data files used by the tests and demos. It must be cloned separately:
 
     # In the same base directory from which you cloned OpenCV:
-    $ git clone https://github.com/opencv/opencv_extra.git
+    $ git clone [https://github.com/opencv/opencv_extra.git](https://github.com/opencv/opencv_extra.git)
 
 As with the OpenCV source, you must use the same method as above to set the source tree to the 3.1.0 version. When you are building from a specific tag, both repositories must be checked out at that tag.
 

@@ -96,9 +96,9 @@ Many kinds of optimizations can be disabled with `CV_DISABLE_OPTIMIZATION` optio
 * Explicit loop unrolling
 
 :::{seealso}
-- https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html
-- https://gcc.gnu.org/onlinedocs/libstdc++/manual/using_macros.html
-- https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options
+- [https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html](https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html)
+- [https://gcc.gnu.org/onlinedocs/libstdc++/manual/using_macros.html](https://gcc.gnu.org/onlinedocs/libstdc++/manual/using_macros.html)
+- [https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options](https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options)
 :::
 
 (tutorial_config_reference_general_static)=
@@ -111,13 +111,13 @@ cmake -DBUILD_SHARED_LIBS=OFF ../opencv
 ```
 
 :::{seealso}
-- https://en.wikipedia.org/wiki/Static_library
+- [https://en.wikipedia.org/wiki/Static_library](https://en.wikipedia.org/wiki/Static_library)
 :::
 
 `ENABLE_PIC` sets the [CMAKE_POSITION_INDEPENDENT_CODE](https://cmake.org/cmake/help/latest/variable/CMAKE_POSITION_INDEPENDENT_CODE.html) option. It enables or disable generation of "position-independent code". This option must be enabled when building dynamic libraries or static libraries intended to be linked into dynamic libraries. Default value is `ON`.
 
 :::{seealso}
-- https://en.wikipedia.org/wiki/Position-independent_code
+- [https://en.wikipedia.org/wiki/Position-independent_code](https://en.wikipedia.org/wiki/Position-independent_code)
 :::
 
 ### Generate pkg-config info
@@ -209,7 +209,7 @@ cmake -DCV_DISABLE_OPTIMIZATION=ON ../opencv
 ```
 
 :::{note}
-More details on CPU optimization options can be found in wiki: https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options
+More details on CPU optimization options can be found in wiki: [https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options](https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options)
 :::
 (profiling_coverage_sanitize_hardening_size_optimization)=
 ### Profiling, coverage, sanitize, hardening, size optimization
@@ -276,7 +276,7 @@ Some tutorials can be found in the corresponding section: [GPU-Accelerated Compu
 :::
 :::{seealso}
 - [CUDA-accelerated Computer Vision](https://docs.opencv.org/5.x/d1/d1e/group__cuda.html)
-- https://en.wikipedia.org/wiki/CUDA
+- [https://en.wikipedia.org/wiki/CUDA](https://en.wikipedia.org/wiki/CUDA)
 :::
 
 TODO: other options: `WITH_CUFFT`, `WITH_CUBLAS`, `WITH_NVCUVID`?
@@ -290,7 +290,7 @@ Multiple OpenCL-accelerated algorithms are available via so-called "Transparent 
 At the build time this feature does not have any prerequisites. During runtime a working OpenCL runtime is required, to check it run `clinfo` and/or `opencv_version --opencl` command. Some parameters of OpenCL integration can be modified using environment variables, e.g. `OPENCV_OPENCL_DEVICE`. However there is no thorough documentation for this feature yet, so please check the source code in `modules/core/src/ocl.cpp` file for details.
 
 :::{seealso}
-- https://en.wikipedia.org/wiki/OpenCL
+- [https://en.wikipedia.org/wiki/OpenCL](https://en.wikipedia.org/wiki/OpenCL)
 :::
 
 TODO: other options: `WITH_OPENCL_SVM`, `WITH_OPENCLAMDFFT`, `WITH_OPENCLAMDBLAS`, `WITH_OPENCL_D3D11_NV`, `WITH_VA_INTEL`

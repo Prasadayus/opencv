@@ -2385,6 +2385,11 @@ TEST(Core_FindNonZero, regression)
     pts.clear();
     findNonZero(img, pts);
     ASSERT_TRUE(pts.size() == nz);
+
+    img.convertTo( img, CV_Bool );
+    pts.resize(pts.size()*2);
+    findNonZero(img, pts);
+    ASSERT_TRUE(pts.size() == nz);
 }
 
 TEST(Core_BoolVector, support)
@@ -3603,6 +3608,35 @@ TEST_P(MinMaxSupportedMatDepth, minMaxIdx)
     int minIdx[2] = {0, 0};
     int maxIdx[2] = {0, 0};
     EXPECT_NO_THROW(cv::minMaxIdx(src, &minV, &maxV, minIdx, maxIdx));
+}
+
+TEST_P(MinMaxSupportedMatDepth, minMaxLoc_values)
+{
+    const int depth = GetParam();
+    cv::Mat src = cv::Mat::zeros(8, 8, CV_MAKETYPE(depth, 1));
+    Mat(src, Rect(5, 3, 1, 1)).setTo(Scalar(10));
+
+    double minV, maxV;
+    Point minLoc, maxLoc;
+    cv::minMaxLoc(src, &minV, &maxV, &minLoc, &maxLoc);
+
+    EXPECT_EQ(Point(5, 3), maxLoc);
+    EXPECT_GT(maxV, minV);
+}
+
+TEST_P(MinMaxSupportedMatDepth, minMaxIdx_values)
+{
+    const int depth = GetParam();
+    cv::Mat src = cv::Mat::zeros(8, 8, CV_MAKETYPE(depth, 1));
+    Mat(src, Rect(5, 3, 1, 1)).setTo(Scalar(10));
+
+    double minV, maxV;
+    int minIdx[2] = {}, maxIdx[2] = {};
+    cv::minMaxIdx(src, &minV, &maxV, minIdx, maxIdx);
+
+    EXPECT_EQ(3, maxIdx[0]);
+    EXPECT_EQ(5, maxIdx[1]);
+    EXPECT_GT(maxV, minV);
 }
 
 INSTANTIATE_TEST_CASE_P(

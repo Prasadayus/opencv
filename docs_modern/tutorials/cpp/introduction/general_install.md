@@ -10,21 +10,21 @@ In many cases you can find prebuilt version of OpenCV that will meet your needs.
 ### Packages by OpenCV core team
 Packages for Android, iOS and Windows built with default parameters and recent compilers are published for each release, they do not contain _opencv_contrib_ modules.
 
-- GitHub releases: https://github.com/opencv/opencv/releases
-- SourceForge.net: https://sourceforge.net/projects/opencvlibrary/files/
+- GitHub releases: [https://github.com/opencv/opencv/releases](https://github.com/opencv/opencv/releases)
+- SourceForge.net: [https://sourceforge.net/projects/opencvlibrary/files/](https://sourceforge.net/projects/opencvlibrary/files/)
 
 (tutorial_general_install_prebuilt_thirdparty)=
 ### Third-party packages
 Other organizations and people maintain their own binary distributions of OpenCV. For example:
 
-- System packages in popular Linux distributions (https://pkgs.org/search/?q=opencv)
-- PyPI (https://pypi.org/search/?q=opencv)
-- Conda (https://anaconda.org/search?q=opencv)
-- Conan (https://conan.io/center/recipes/opencv)
-- vcpkg (https://github.com/microsoft/vcpkg/tree/master/ports/opencv)
-- NuGet (https://www.nuget.org/packages?q=opencv)
-- Brew (https://formulae.brew.sh/formula/opencv)
-- Maven (https://search.maven.org/search?q=opencv)
+- System packages in popular Linux distributions ([https://pkgs.org/search/?q=opencv](https://pkgs.org/search/?q=opencv))
+- PyPI ([https://pypi.org/search/?q=opencv](https://pypi.org/search/?q=opencv))
+- Conda ([https://anaconda.org/search?q=opencv](https://anaconda.org/search?q=opencv))
+- Conan ([https://conan.io/center/recipes/opencv](https://conan.io/center/recipes/opencv))
+- vcpkg ([https://github.com/microsoft/vcpkg/tree/master/ports/opencv](https://github.com/microsoft/vcpkg/tree/master/ports/opencv))
+- NuGet ([https://www.nuget.org/packages?q=opencv](https://www.nuget.org/packages?q=opencv))
+- Brew ([https://formulae.brew.sh/formula/opencv](https://formulae.brew.sh/formula/opencv))
+- Maven ([https://search.maven.org/search?q=opencv](https://search.maven.org/search?q=opencv))
 
 (tutorial_general_install_sources)=
 ## Build from sources
@@ -48,9 +48,9 @@ You can download a snapshot of repository in form of an archive or clone reposit
 
 To download snapshot archives:
 
-- Go to https://github.com/opencv/opencv/releases and download "Source code" archive from any release.
-- (optionally) Go to https://github.com/opencv/opencv_contrib/releases and download "Source code" archive for the same release as _opencv_
-- (optionally) Go to https://github.com/opencv/opencv_extra/releases and download "Source code" archive for the same release as _opencv_
+- Go to [https://github.com/opencv/opencv/releases](https://github.com/opencv/opencv/releases) and download "Source code" archive from any release.
+- (optionally) Go to [https://github.com/opencv/opencv_contrib/releases](https://github.com/opencv/opencv_contrib/releases) and download "Source code" archive for the same release as _opencv_
+- (optionally) Go to [https://github.com/opencv/opencv_extra/releases](https://github.com/opencv/opencv_extra/releases) and download "Source code" archive for the same release as _opencv_
 - Unpack all archives to some location
 
 To clone repositories run the following commands in console (_git_ [must be installed](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)):
@@ -80,7 +80,7 @@ cmake -G<generator> <configuration-options> <source-directory>
 ```
 
 :::{note}
-`cmake-gui` application allows to see and modify available options using graphical user interface. See https://cmake.org/runningcmake/ for details.
+`cmake-gui` application allows to see and modify available options using graphical user interface. See [https://cmake.org/runningcmake/](https://cmake.org/runningcmake/) for details.
 :::
 (tutorial_general_install_sources_3)=
 ### Step 3: Build
