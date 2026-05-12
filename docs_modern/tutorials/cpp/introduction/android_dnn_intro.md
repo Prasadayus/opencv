@@ -22,10 +22,10 @@ Tutorial was written for Android Studio 2022.2.1.
 
 - Download and install Android Studio from [https://developer.android.com/studio.](https://developer.android.com/studio.)
 
-- Get the latest pre-built OpenCV for Android release from [https://github.com/opencv/opencv/releases](https://github.com/opencv/opencv/releases)
+- Get the latest pre-built OpenCV for Android release from [opencv/opencv/releases](https://github.com/opencv/opencv/releases)
 and unpack it (for example, `opencv-4.X.Y-android-sdk.zip`, minimum version 4.9 is required).
 
-- Download MobileNet object detection model from [https://github.com/chuanqi305/MobileNet-SSD.](https://github.com/chuanqi305/MobileNet-SSD.)
+- Download MobileNet object detection model from [chuanqi305/MobileNet-SSD.](https://github.com/chuanqi305/MobileNet-SSD.)
 Configuration file `MobileNetSSD_deploy.prototxt` and model weights `MobileNetSSD_deploy.caffemodel`
 are required.
 

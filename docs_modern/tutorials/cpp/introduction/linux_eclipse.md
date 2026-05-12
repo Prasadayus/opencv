@@ -104,9 +104,9 @@ For instance, that command gave me this output:
 ```bash
 -I/usr/local/include/opencv -I/usr/local/include
 ```
+:::
 
 1. Now go to **GCC C++ Linker**,there you have to fill two spaces:
-:::
 First in **Library search path (-L)** you have to write the path to where the opencv libraries
 reside, in my case the path is: :
 

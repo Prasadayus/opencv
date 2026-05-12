@@ -15,12 +15,15 @@ This tutorial can contain obsolete information.
 :::{note}
 We assume that you have successfully installed OpenCV in your workstation.
 :::
--   The easiest way of using OpenCV in your code is to use [CMake](http://www.cmake.org/). A few
-    advantages (taken from the Wiki):
-    1. No need to change anything when porting between Linux and Windows
-    1. Can easily be combined with other tools by CMake( i.e. Qt, ITK and VTK )
--   If you are not familiar with CMake, checkout the
-    [tutorial](http://www.cmake.org/cmake/help/cmake_tutorial.html) on its website.
+
+The easiest way of using OpenCV in your code is to use [CMake](http://www.cmake.org/). A few
+advantages (taken from the Wiki):
+
+1. No need to change anything when porting between Linux and Windows
+1. Can easily be combined with other tools by CMake( i.e. Qt, ITK and VTK )
+
+If you are not familiar with CMake, checkout the
+[tutorial](http://www.cmake.org/cmake/help/cmake_tutorial.html) on its website.
 
 ## Steps
 

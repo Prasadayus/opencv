@@ -39,7 +39,7 @@ for (int i = 0; i < boardSize.height; ++i) {
     }
 }
 ```
-Printable chessboard pattern: [https://github.com/opencv/opencv/blob/5.x/doc/pattern.png](https://github.com/opencv/opencv/blob/5.x/doc/pattern.png)
+Printable chessboard pattern: [opencv/opencv/blob/5.x/doc/pattern.png](https://github.com/opencv/opencv/blob/5.x/doc/pattern.png)
 (9x6 chessboard, page width: 210 mm, page height: 297 mm (A4))
 
 **Circles Grid**. The circles grid is symmetric or asymmetric (each even row shifted) grid of black
@@ -67,7 +67,7 @@ for (int i = 0; i < boardSize.height; i++) {
     }
 }
 ```
-Printable asymmetric circles grid pattern: [https://github.com/opencv/opencv/blob/5.x/doc/acircles_pattern.png](https://github.com/opencv/opencv/blob/5.x/doc/acircles_pattern.png)
+Printable asymmetric circles grid pattern: [opencv/opencv/blob/5.x/doc/acircles_pattern.png](https://github.com/opencv/opencv/blob/5.x/doc/acircles_pattern.png)
 (11x4 asymmetric circles grid, page width: 210 mm, page height: 297 mm (A4))
 
 **ChAruco board**. Chessboard unreached with ArUco markers. Each internal corner of the board is
@@ -88,7 +88,7 @@ for (int i = 0; i < boardSize.height-1; ++i) {
     }
 }
 ```
-Printable ChAruco board pattern: [https://github.com/opencv/opencv/blob/5.x/doc/charuco_board_pattern.png](https://github.com/opencv/opencv/blob/5.x/doc/charuco_board_pattern.png)
+Printable ChAruco board pattern: [opencv/opencv/blob/5.x/doc/charuco_board_pattern.png](https://github.com/opencv/opencv/blob/5.x/doc/charuco_board_pattern.png)
 (7X5 ChAruco board, square size: 30 mm, marker size: 15 mm, ArUco dict: DICT_5X5_100, page width:
 210 mm, page height: 297 mm (A4))
 

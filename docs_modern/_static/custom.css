@@ -43,42 +43,39 @@ html[data-theme="light"] {
     --opencv-accent: #003a6b;
 }
 html[data-theme="dark"] {
-    --pst-color-link: #2e7eaf;
-    --pst-color-link-hover: #4ea3d4;
     --opencv-accent: #a4c9ff;
 }
 
 .bd-content a { text-decoration: none; color: #0969da; }
-html[data-theme="dark"] .bd-content a { color: #539bf5 !important; }
+html[data-theme="dark"] .bd-article-container a { color: #539bf5 !important; }
 .bd-content a:hover {
     text-decoration: underline;
     text-underline-offset: 0.22em;
     text-decoration-thickness: 1px;
     color: #0550ae;
 }
-html[data-theme="dark"] .bd-content a:hover { color: #6cb6ff !important; }
+html[data-theme="dark"] .bd-article-container a:hover { color: #6cb6ff !important; }
 
 .bd-content a > code,
 .bd-content code > a {
     color: inherit;
 }
 
-div.highlight pre, pre.literal-block {
-    font-size: 0.875rem;
-    line-height: 1.55;
-    overflow-x: auto;
-    white-space: pre;
-}
 
-div.highlight {
-    position: relative;
+.doxysnippet {
+    display: block !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 0 1rem 0 !important;
+    background: transparent !important;
+    border: none !important;
 }
-
-.doxysnippet { border-left: 3px solid var(--pst-color-primary); }
 
 .opencv-meta-table,
 .opencv-meta-table .pst-scrollable-table-container { margin: 0 !important; padding: 0 !important; }
 .opencv-meta-table table { margin-bottom: 0 !important; }
+.opencv-meta-table + p,
+div.opencv-meta-table + p { margin-top: 1.5rem !important; }
 .opencv-meta-table .pst-scrollable-table-container,
 .opencv-meta-table table,
 table.opencv-meta-table {
@@ -190,41 +187,37 @@ table.opencv-rowspan-table td {
     border-collapse: collapse !important;
     width: 100%;
     margin-bottom: 1rem;
-    border: 1px solid #dee2e6 !important;
+    border: 1px solid var(--pst-color-border) !important;
 }
 .bd-content table th {
-    border: 1px solid #dee2e6 !important;
+    border: 1px solid var(--pst-color-border) !important;
     padding: 0.65rem 1rem !important;
-    background: #f8f9fa !important;
+    background: var(--pst-color-surface) !important;
     font-size: 0.8rem !important;
     text-transform: uppercase !important;
     letter-spacing: 0.07em !important;
-    color: #6c757d !important;
+    color: var(--pst-color-muted) !important;
     font-weight: 600 !important;
 }
 .bd-content table td {
-    border: 1px solid #dee2e6 !important;
+    border: 1px solid var(--pst-color-border) !important;
     padding: 0.65rem 1rem !important;
     vertical-align: middle !important;
 }
 .bd-content table tbody tr:hover td {
-    background: #f8f9fa !important;
-}
-html[data-theme="dark"] .bd-content table {
-    border-color: #444c56 !important;
-}
-html[data-theme="dark"] .bd-content table th {
-    border-color: #444c56 !important;
-    background: #2d333b !important;
-    color: #768390 !important;
-}
-html[data-theme="dark"] .bd-content table td {
-    border-color: #444c56 !important;
-}
-html[data-theme="dark"] .bd-content table tbody tr:hover td {
-    background: #2d333b !important;
+    background: var(--pst-color-surface) !important;
 }
 
+
+/* GitHub links — prepend Octocat icon (Font Awesome Brands is loaded by pydata) */
+a.github.reference.external::before {
+    font-family: "Font Awesome 6 Brands";
+    font-weight: 400;
+    content: "\f09b";
+    margin-right: 0.35rem;
+    font-size: 0.95em;
+    vertical-align: -0.05em;
+}
 
 a.opencv-code-link {
     color: #0969da !important;
@@ -385,19 +378,15 @@ table.opencv-module-table { margin-bottom: 1rem; }
 
 @media (min-width: 960px) {
     .bd-page-width,
-    .bd-container__inner.bd-page-width,
-    .bd-header__inner.bd-page-width {
+    .bd-container__inner.bd-page-width {
         max-width: none !important;
-        margin-left: 0 !important;
-        margin-right: 0 !important;
     }
     .bd-container {
         max-width: none !important;
     }
     .bd-sidebar-primary {
         padding-left: 1rem !important;
-        padding-right: 0.75rem !important;
-        margin-left: 0 !important;
+        padding-right: 1rem !important;
     }
     .bd-main .bd-content,
     .bd-main .bd-article-container {
@@ -408,33 +397,55 @@ table.opencv-module-table { margin-bottom: 1rem; }
         padding-left: 0;
         padding-right: 0;
     }
-    .bd-sidebar-primary .sidebar-primary-items__start,
-    .bd-sidebar-primary .sidebar-primary-items__end {
-        padding-left: 0;
-    }
-    .bd-sidebar-primary .bd-toc-item,
-    .bd-sidebar-primary nav.bd-links {
-        padding-left: 0;
-    }
-    .bd-sidebar-primary .nav-link,
-    .bd-sidebar-primary .reference {
-        padding-left: 0.4rem !important;
-    }
-    .bd-sidebar-primary ul ul .nav-link,
-    .bd-sidebar-primary ul ul .reference {
-        padding-left: 1rem !important;
-    }
-    .bd-sidebar-primary ul ul ul .nav-link,
-    .bd-sidebar-primary ul ul ul .reference {
-        padding-left: 1.6rem !important;
-    }
-    .bd-sidebar-primary .navbar-nav h3,
-    .bd-sidebar-primary .navbar-nav .caption {
-        padding-left: 0.4rem;
-    }
-    .bd-container__inner.bd-page-width {
-        padding-left: 0;
-    }
+}
+
+/* Pull nav back from the sidebar's right border so the absolute-positioned
+   toctree toggle (right:0 of its li) lands inside the overflow clip area */
+.bd-sidebar-primary nav.bd-links {
+    margin-right: 0 !important;
+}
+
+/* Sidebar nav typography */
+.bd-sidebar-primary nav.bd-docs-nav p.bd-links__title {
+    font-size: 0.9rem !important;
+    font-weight: 700 !important;
+    text-transform: none !important;
+    letter-spacing: normal !important;
+    color: var(--pst-color-text-base) !important;
+    margin-bottom: 0.5rem !important;
+}
+
+.bd-sidebar-primary nav.bd-links li > a {
+    font-size: 0.9rem !important;
+    line-height: 1.45 !important;
+    padding-top: 0.28rem !important;
+    padding-bottom: 0.28rem !important;
+}
+
+.bd-sidebar-primary nav.bd-links .toctree-l1 > a {
+    font-weight: 500 !important;
+    padding-left: 0.65rem !important;
+}
+
+.bd-sidebar-primary nav.bd-links .toctree-l2 > a {
+    font-size: 0.875rem !important;
+    padding-left: 1.25rem !important;
+    color: var(--pst-color-text-muted) !important;
+}
+
+.bd-sidebar-primary nav.bd-links .toctree-l3 > a {
+    font-size: 0.86rem !important;
+    padding-left: 2rem !important;
+    color: var(--pst-color-text-muted) !important;
+}
+
+.bd-sidebar-primary nav.bd-links .current > a {
+    color: var(--pst-color-primary) !important;
+    font-weight: 600 !important;
+}
+
+html[data-theme="dark"] .bd-sidebar-primary nav.bd-links .current > a {
+    color: #539bf5 !important;
 }
 
 table.opencv-module-table tbody tr {
@@ -611,14 +622,14 @@ dd.field-even ul.simple > li strong {
     margin-right: 0.25rem;
 }
 
-/* "Defined in" → #include badge */
-article.bd-article > section > ul.simple {
+/* "Defined in" → #include badge (only when ul.simple immediately follows h1, i.e. API pages) */
+article.bd-article > section > h1 + ul.simple {
     list-style: none;
     padding: 0;
     margin: 0 0 1.5rem;
 }
 
-article.bd-article > section > ul.simple > li > p {
+article.bd-article > section > h1 + ul.simple > li > p {
     font-size: 0.85rem;
     color: var(--pst-color-text-muted);
     font-family: var(--pst-font-family-monospace);
@@ -638,8 +649,22 @@ mjx-container.MathJax:not([display="true"]) {
     clear: both;
 }
 
-.prev-next-area a:hover {
-    text-decoration: none !important;
+.prev-next-area .prev-next-title {
+    color: var(--pst-color-link) !important;
+    font-weight: 600 !important;
+    font-size: 1rem !important;
+}
+
+.prev-next-area a:hover .prev-next-title {
+    color: var(--pst-color-link-hover) !important;
+    text-decoration: underline !important;
+}
+
+.prev-next-area .prev-next-subtitle {
+    font-size: 0.78rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+    color: var(--pst-color-muted) !important;
 }
 
 /* ---- Tab sets ---- */
@@ -697,7 +722,31 @@ mjx-container.MathJax:not([display="true"]) {
 
 div.highlight {
     position: relative;
+    display: block !important;
+    width: 100% !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
 }
+
+div.highlight pre {
+    font-size: 0.875rem !important;
+    line-height: 1.55 !important;
+    overflow-x: auto !important;
+    white-space: pre !important;
+    background: #f6f8fa !important;
+    color: #24292e !important;
+    border: none !important;
+    border-left: 3px solid #0550ae !important;
+    border-radius: 0.4rem !important;
+    padding: 0.6rem 0.85rem !important;
+    margin: 0 !important;
+    font-style: normal !important;
+}
+
+.highlight .c, .highlight .ch, .highlight .cm,
+.highlight .cpf, .highlight .c1, .highlight .cs { font-style: normal !important; }
 
 .ocv-copy-btn {
     position: absolute;
@@ -744,7 +793,7 @@ div.highlight:hover .ocv-copy-btn {
     color: #fff !important;
     box-shadow: 0 4px 14px rgba(0, 60, 120, 0.35) !important;
     left: 50% !important;
-    transform: translateX(-15%) !important;
+    transform: translateX(-50%) !important;
     transition: box-shadow 150ms ease, opacity 150ms ease !important;
 }
 
@@ -755,264 +804,52 @@ div.highlight:hover .ocv-copy-btn {
     opacity: 0.92 !important;
 }
 
-/* ── Dark mode overrides for pydata-sphinx-theme 0.7 (Bootstrap 5.1) ── */
 html[data-theme="dark"] {
-    --pst-color-background: #22272e;
-    --pst-color-on-background: #cdd9e5;
-    --pst-color-surface: #2d333b;
-    --pst-color-on-surface: #cdd9e5;
-    --bs-body-bg: #22272e;
-    --bs-body-color: #cdd9e5;
-    --bs-table-bg: transparent;
-    --bs-table-color: #cdd9e5;
-    --bs-border-color: #444c56;
     color-scheme: dark;
 }
 
-html[data-theme="dark"] body,
-html[data-theme="dark"] .bd-main,
-html[data-theme="dark"] .bd-content,
-html[data-theme="dark"] .bd-article-container,
-html[data-theme="dark"] article.bd-article {
-    background-color: #22272e !important;
-    color: #cdd9e5 !important;
-}
 
-html[data-theme="dark"] .bd-navbar,
-html[data-theme="dark"] nav.bd-navbar,
-html[data-theme="dark"] .bg-light,
-html[data-theme="dark"] header {
-    background-color: #2d333b !important;
-    border-bottom: 1px solid #444c56 !important;
-}
 
-html[data-theme="dark"] .navbar-light .nav-link,
-html[data-theme="dark"] .navbar-light .navbar-brand,
-html[data-theme="dark"] .navbar-light .navbar-nav .nav-link,
-html[data-theme="dark"] .navbar-brand,
-html[data-theme="dark"] .nav-link {
-    color: #cdd9e5 !important;
-}
 
-html[data-theme="dark"] .navbar-light .nav-link:hover,
-html[data-theme="dark"] .nav-link:hover {
-    color: #539bf5 !important;
-}
-
-html[data-theme="dark"] .bd-sidebar:not(.no-sidebar),
-html[data-theme="dark"] #bd-sidebar:not(.no-sidebar) {
-    background-color: #1c2128 !important;
-    border-right: 1px solid #444c56 !important;
-}
-html[data-theme="dark"] .bd-sidebar.no-sidebar {
-    background-color: transparent !important;
-    border-right: none !important;
-}
-
-.bd-sidebar,
-.col-md-3.bd-sidebar,
-[class*="col-"].bd-sidebar {
-    padding: 0 !important;
-    margin-left: 0 !important;
-    height: auto !important;
-    overflow-y: visible !important;
-    position: sticky !important;
-    top: 60px !important;
-    align-self: flex-start !important;
-}
-
-.bd-sidebar > nav,
-.bd-sidebar > .bd-links {
-    max-height: calc(100vh - 70px) !important;
-    overflow-y: auto !important;
-}
-
-.bd-sidebar .bd-links,
-.bd-sidebar nav,
-.bd-sidebar #bd-docs-nav {
-    padding: 0 !important;
-    margin: 0 !important;
-    border-right: 1px solid #dee2e6;
-}
-
-.bd-sidebar .bd-links ul,
-.bd-sidebar .bd-links li {
-    padding: 0 !important;
-    margin: 0 !important;
-    list-style: none !important;
-}
-
-.bd-sidebar .bd-links a,
-.bd-sidebar .bd-links a.reference {
-    display: block !important;
-    padding: 0.32rem 0.75rem 0.32rem 0.25rem !important;
-    border-left: 3px solid transparent !important;
-    font-size: 0.88rem !important;
-    line-height: 1.4 !important;
-    text-decoration: none !important;
-}
-
-/* Indent sub-items */
-.bd-sidebar .bd-links ul ul a { padding-left: 0.9rem !important; }
-.bd-sidebar .bd-links ul ul ul a { padding-left: 1.5rem !important; }
-
-.bd-sidebar .bd-links a.current,
-.bd-sidebar .bd-links li.current > a,
-.bd-sidebar .bd-links li.active > a {
-    border-left-color: #0066cc !important;
-    font-weight: 600 !important;
-    color: #0066cc !important;
-}
-html[data-theme="dark"] .bd-sidebar .bd-links a.current,
-html[data-theme="dark"] .bd-sidebar .bd-links li.current > a,
-html[data-theme="dark"] .bd-sidebar .bd-links li.active > a {
-    border-left-color: #539bf5 !important;
-    color: #539bf5 !important;
-    background: rgba(83,155,245,0.08) !important;
-}
-
-/* Full-width content area so sidebar reaches left viewport edge */
-.container-xl,
-.container-fluid {
-    max-width: none !important;
-    padding-left: 0 !important;
-    padding-right: 0 !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-}
-/* But keep the navbar container centered at a readable width */
-.bd-navbar .container-xl,
-nav.navbar .container-xl {
-    max-width: 1400px !important;
-    margin-left: auto !important;
-    margin-right: auto !important;
-    padding-left: 1rem !important;
-    padding-right: 1rem !important;
-}
-div.container-xl > div.row > div.bd-sidebar {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
-}
-.container-xl > .row {
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-    align-items: flex-start !important;
-}
-
-/* Pin sidebar to fixed width so it doesn't grow too wide on large screens */
-@media (min-width: 768px) {
-    .col-md-3.bd-sidebar:not(.no-sidebar) {
-        flex: 0 0 260px !important;
-        max-width: 260px !important;
-        width: 260px !important;
-    }
-}
-
-.bd-sidebar #bd-docs-nav::before {
-    content: "Section Navigation";
-    display: block;
-    font-size: 0.82rem;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    padding: 0.75rem 0.75rem 0.5rem 0.25rem;
-    color: var(--pst-color-text-base, #212529);
-}
-html[data-theme="dark"] .bd-sidebar #bd-docs-nav::before {
-    color: #cdd9e5;
-}
-
-html[data-theme="dark"] .bd-sidebar a,
-html[data-theme="dark"] #bd-sidebar a,
-html[data-theme="dark"] .sidebar-primary a {
-    color: #cdd9e5 !important;
-}
-
-html[data-theme="dark"] .bd-sidebar a:hover,
-html[data-theme="dark"] #bd-sidebar a:hover {
-    color: #539bf5 !important;
-}
-
-html[data-theme="dark"] .bd-sidebar a.current,
-html[data-theme="dark"] .bd-sidebar a.active,
-html[data-theme="dark"] #bd-sidebar .current > a {
-    color: #539bf5 !important;
-    font-weight: 600;
-}
-
-html[data-theme="dark"] h1, html[data-theme="dark"] h2,
-html[data-theme="dark"] h3, html[data-theme="dark"] h4,
-html[data-theme="dark"] h5, html[data-theme="dark"] h6 {
-    color: #cdd9e5 !important;
-}
-
-html[data-theme="dark"] p,
-html[data-theme="dark"] li {
-    color: #cdd9e5 !important;
-}
-
-html[data-theme="dark"] td,
-html[data-theme="dark"] th {
-    color: #cdd9e5 !important;
-}
-
-html[data-theme="dark"] .highlight span,
-html[data-theme="dark"] .highlight *,
-html[data-theme="dark"] pre span {
+/* Dark mode: reset Pygments light-mode token colors and apply dark theme tokens */
+html[data-theme="dark"] div.highlight span,
+html[data-theme="dark"] div.highlight * {
     color: unset !important;
 }
 
-/* Pygments token colors for dark mode */
-html[data-theme="dark"] .highlight .c,
-html[data-theme="dark"] .highlight .c1,
-html[data-theme="dark"] .highlight .c2,
-html[data-theme="dark"] .highlight .cm,
-html[data-theme="dark"] .highlight .cp,
-html[data-theme="dark"] .highlight .cs,
+html[data-theme="dark"] .highlight .c, html[data-theme="dark"] .highlight .c1,
+html[data-theme="dark"] .highlight .c2, html[data-theme="dark"] .highlight .cm,
+html[data-theme="dark"] .highlight .cp, html[data-theme="dark"] .highlight .cs,
 html[data-theme="dark"] .highlight .ch,
-html[data-theme="dark"] .highlight .cpf { color: #e3b341 !important; font-style: italic; }
+html[data-theme="dark"] .highlight .cpf { color: #e3b341 !important; font-style: normal !important; }
 
-html[data-theme="dark"] .highlight .k,
-html[data-theme="dark"] .highlight .kd,
-html[data-theme="dark"] .highlight .kn,
-html[data-theme="dark"] .highlight .kp,
+html[data-theme="dark"] .highlight .k, html[data-theme="dark"] .highlight .kd,
+html[data-theme="dark"] .highlight .kn, html[data-theme="dark"] .highlight .kp,
 html[data-theme="dark"] .highlight .kr,
 html[data-theme="dark"] .highlight .kt { color: #f47067 !important; font-weight: 600; }
 
-html[data-theme="dark"] .highlight .s,
-html[data-theme="dark"] .highlight .s1,
-html[data-theme="dark"] .highlight .s2,
-html[data-theme="dark"] .highlight .sa,
-html[data-theme="dark"] .highlight .sb,
-html[data-theme="dark"] .highlight .sc,
-html[data-theme="dark"] .highlight .sd,
-html[data-theme="dark"] .highlight .se,
+html[data-theme="dark"] .highlight .s, html[data-theme="dark"] .highlight .s1,
+html[data-theme="dark"] .highlight .s2, html[data-theme="dark"] .highlight .sa,
+html[data-theme="dark"] .highlight .sb, html[data-theme="dark"] .highlight .sc,
+html[data-theme="dark"] .highlight .sd, html[data-theme="dark"] .highlight .se,
 html[data-theme="dark"] .highlight .si,
 html[data-theme="dark"] .highlight .ss { color: #96d0ff !important; }
 
-html[data-theme="dark"] .highlight .n,
-html[data-theme="dark"] .highlight .na,
-html[data-theme="dark"] .highlight .nb,
-html[data-theme="dark"] .highlight .nc,
+html[data-theme="dark"] .highlight .n, html[data-theme="dark"] .highlight .na,
+html[data-theme="dark"] .highlight .nb, html[data-theme="dark"] .highlight .nc,
 html[data-theme="dark"] .highlight .nf,
 html[data-theme="dark"] .highlight .nn { color: #cdd9e5 !important; }
 
 html[data-theme="dark"] .highlight .o,
 html[data-theme="dark"] .highlight .ow { color: #f47067 !important; }
 
-html[data-theme="dark"] .highlight .mi,
-html[data-theme="dark"] .highlight .mf,
+html[data-theme="dark"] .highlight .mi, html[data-theme="dark"] .highlight .mf,
 html[data-theme="dark"] .highlight .mh,
 html[data-theme="dark"] .highlight .mo { color: #6cb6ff !important; }
 
-html[data-theme="dark"] a,
-html[data-theme="dark"] a span { color: #539bf5 !important; }
-html[data-theme="dark"] a:hover { color: #6cb6ff !important; }
-
-html[data-theme="dark"] .highlight,
-html[data-theme="dark"] pre,
-html[data-theme="dark"] .highlight > pre {
-    background-color: #2d333b !important;
-    border: 1px solid #444c56 !important;
+html[data-theme="dark"] div.highlight pre {
+    background: #2d333b !important;
+    color: #cdd9e5 !important;
     border-left: 3px solid #539bf5 !important;
 }
 
@@ -1022,62 +859,6 @@ html[data-theme="dark"] .sig {
     color: #cdd9e5 !important;
 }
 
-html[data-theme="dark"] table,
-html[data-theme="dark"] .table {
-    background-color: transparent !important;
-    border-color: #444c56 !important;
-}
-
-html[data-theme="dark"] table th,
-html[data-theme="dark"] .table th {
-    background-color: #2d333b !important;
-    border-color: #444c56 !important;
-    color: #cdd9e5 !important;
-}
-
-html[data-theme="dark"] table td,
-html[data-theme="dark"] .table td {
-    background-color: transparent !important;
-    border-color: #444c56 !important;
-    color: #cdd9e5 !important;
-}
-
-html[data-theme="dark"] .table-striped > tbody > tr:nth-of-type(odd) > * {
-    background-color: rgba(255,255,255,0.03) !important;
-    color: #cdd9e5 !important;
-}
-
-html[data-theme="dark"] .bd-toc,
-html[data-theme="dark"] #bd-toc-nav,
-html[data-theme="dark"] .toc-entry {
-    background-color: #22272e !important;
-}
-
-html[data-theme="dark"] #bd-toc-nav a,
-html[data-theme="dark"] .toc-entry a {
-    color: #768390 !important;
-}
-
-html[data-theme="dark"] #bd-toc-nav a:hover,
-html[data-theme="dark"] #bd-toc-nav a.active {
-    color: #539bf5 !important;
-}
-
-html[data-theme="dark"] .bd-footer,
-html[data-theme="dark"] footer {
-    background-color: #2d333b !important;
-    border-top: 1px solid #444c56 !important;
-    color: #768390 !important;
-}
-
-html[data-theme="dark"] .admonition,
-html[data-theme="dark"] .note,
-html[data-theme="dark"] .warning,
-html[data-theme="dark"] .tip {
-    background-color: #2d333b !important;
-    border-color: #444c56 !important;
-    color: #cdd9e5 !important;
-}
 
 html[data-theme="dark"] .ocv-tabset { border-color: #444c56; }
 html[data-theme="dark"] .ocv-tab-labels {
@@ -1132,6 +913,13 @@ html[data-theme="dark"] .ocv-breadcrumb-home:hover {
 html[data-theme="dark"] .ocv-breadcrumb a:hover { color: #539bf5; }
 html[data-theme="dark"] .ocv-breadcrumb-current { color: #cdd9e5; }
 
+.ocv-breadcrumb { display: none !important; }
+
+a.headerlink { opacity: 0; transition: opacity 120ms; }
+h1:hover a.headerlink, h2:hover a.headerlink, h3:hover a.headerlink,
+h4:hover a.headerlink, h5:hover a.headerlink, h6:hover a.headerlink,
+dt:hover a.headerlink { opacity: 1; }
+
 /* ── Active TOC highlight ── */
 #bd-toc-nav a.ocv-toc-active {
     color: #0066cc !important;
@@ -1142,8 +930,11 @@ html[data-theme="dark"] #bd-toc-nav a.ocv-toc-active {
     font-weight: 600;
 }
 
-/* ── Back to top button ── */
+/* ── Back to top button (hidden — pydata 0.17.1 has built-in #pst-back-to-top) ── */
 #ocv-back-to-top {
+    display: none !important;
+}
+#ocv-back-to-top-disabled {
     position: fixed;
     bottom: 2rem;
     left: 50%;

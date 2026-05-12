@@ -43,6 +43,10 @@ _TOGGLE_LABELS = {
     "cpp": "C++", "python": "Python", "java": "Java",
     "javascript": "JavaScript", "csharp": "C#", "fortran": "Fortran",
 }
+_EMPTY_TOGGLE_RE = re.compile(
+    r"^[ \t]*@add_toggle_\w+[ \t]*\n[ \t]*@end_toggle[ \t]*\n?",
+    re.M,
+)
 _TOGGLE_RE = re.compile(
     r"^[ \t]*@add_toggle_(?P<lang>\w+)[ \t]*\n(?P<body>.*?)\n[ \t]*@end_toggle[ \t]*$",
     re.S | re.M,
@@ -59,6 +63,7 @@ def _convert_toggle_blocks(text: str) -> str:
         body = m.group("body").strip("\n")
         return f"@@TAB_ITEM@@ {lang}|{label}\n{body}\n@@END_TAB_ITEM@@"
 
+    text = _EMPTY_TOGGLE_RE.sub("", text)
     text = _TOGGLE_RE.sub(_block_to_tab, text)
 
     lines = text.splitlines(keepends=False)
@@ -214,7 +219,8 @@ def _convert_numbered_steps(text: str) -> str:
                 i += 1
                 continue
             if cur_indent >= body_indent:
-                out.append(ln[body_indent:])
+                content_col = len(indent) + 3
+                out.append(" " * content_col + ln[body_indent:])
             else:
                 out.append(ln)
             i += 1
@@ -412,16 +418,29 @@ def transform(text: str, tags: TagIndex, *,
         return r"\begin{array}{" + cols + "}" + r" \\ ".join(rows) + r"\end{array}"
     text = re.sub(r"\\bordermatrix\s*\{(.+?)\}", _bordermatrix_sub, text, flags=re.S)
 
-    text = re.sub(r"\\f\[(.+?)\\f\]", lambda m: f"$$\n{m.group(1).strip()}\n$$",
-                  text, flags=re.S)
+    text = re.sub(r"^([ \t]*)\\f\[(.+?)\\f\]",
+                  lambda m: f"{m.group(1)}$$\n{m.group(1)}{m.group(2).strip()}\n{m.group(1)}$$",
+                  text, flags=re.S | re.M)
     text = re.sub(r"\\f\$(.+?)\\f\$", lambda m: f"${m.group(1)}$",
                   text, flags=re.S)
 
+    def _escape_mul_stars_in_italic(m: re.Match) -> str:
+        inner = re.sub(r"(?<!\\)\*(?=\d)", r"\\*", m.group(1))
+        return f"*{inner}*"
+    text = re.sub(
+        r"\*(?=[A-Za-z(])((?:[^*\n]|\*(?=\d))+)\*(?=[ \t,;:.()\n]|$)",
+        _escape_mul_stars_in_italic, text, flags=re.M)
+
     def _escape_unmatched_italic(m: re.Match) -> str:
         return "\\*" + m.group(1).replace("*", r"\*") + r"\*"
-    text = re.sub(r"\*([^*\n]+\*[^*\n]+)\\\*", _escape_unmatched_italic, text)
+    text = re.sub(r"\*([^*\n]+\*[^*\n]+)\\\*(?![^*\n]*\*)", _escape_unmatched_italic, text)
 
     text = re.sub(r"^([^\n]+?)\n-{3,}\s*\n", r"## \1\n\n", text, flags=re.M)
+
+    def _html_heading_to_md(m: re.Match) -> str:
+        level = int(m.group(1))
+        return "#" * level + " " + m.group(2).strip()
+    text = re.sub(r"(?i)<[Hh]([1-6])>(.*?)</[Hh][1-6]>", _html_heading_to_md, text)
 
     text = _convert_numbered_steps(text)
 
@@ -660,11 +679,15 @@ def transform(text: str, tags: TagIndex, *,
     text = _restore_verbatim_lines(text)
 
     text = _indent_orphan_code_fences(text)
+    text = _fix_overindented_sub_bullets(text)
     text = _convert_module_bullets_to_table(text)
     text = _convert_rowspan_tables(text)
+    text = _deindent_toplevel_numbered_lists(text)
     text = _convert_images_to_figures(text)
     text = _wrap_metadata_table(text)
 
+    text = _ensure_blank_lines_around_images(text)
+    text = _ensure_blank_lines_around_display_math(text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.lstrip("\n")
 
@@ -872,10 +895,181 @@ def _indent_orphan_code_fences(text: str) -> str:
     return "".join(lines)
 
 
+def _fix_overindented_sub_bullets(text: str) -> str:
+    """Normalize over-indented sub-bullets within col-0 -   list items.
+
+    In Doxygen source, sub-bullets inside a -   parent item are sometimes
+    at col 8 or col 12 instead of col 4. CommonMark treats col 4+4=8+
+    content as an indented code block within the parent item body, so the
+    sub-bullets disappear. This pass de-indents them to col 4 and adjusts
+    their continuation lines by the same amount.
+    """
+    lines = text.splitlines(keepends=False)
+    _parent_re = re.compile(r"^[-*+]   ")
+    _bullet_re = re.compile(r"^(\s+)([-*+])\s+")
+    in_fence = False
+    in_parent = False
+    cur_excess = 0
+    cur_bullet_col = 0
+    out: list[str] = []
+
+    for ln in lines:
+        s = ln.lstrip()
+        if s.startswith("```"):
+            in_fence = not in_fence
+            out.append(ln)
+            continue
+
+        if in_fence:
+            out.append(ln)
+            continue
+
+        if _parent_re.match(ln):
+            in_parent = True
+            cur_excess = 0
+            out.append(ln)
+            continue
+
+        if not in_parent:
+            out.append(ln)
+            continue
+
+        if not ln.strip():
+            out.append(ln)
+            continue
+
+        col = len(ln) - len(ln.lstrip())
+
+        if col == 0:
+            in_parent = False
+            cur_excess = 0
+            out.append(ln)
+            continue
+
+        m = _bullet_re.match(ln)
+        if m:
+            bullet_col = len(m.group(1))
+            if bullet_col > 4:
+                cur_excess = bullet_col - 4
+                cur_bullet_col = bullet_col
+                out.append(ln[cur_excess:])
+            else:
+                cur_excess = 0
+                out.append(ln)
+        elif cur_excess > 0 and col >= cur_bullet_col:
+            out.append(ln[cur_excess:])
+        else:
+            if col < cur_bullet_col:
+                cur_excess = 0
+            out.append(ln)
+
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def _deindent_toplevel_numbered_lists(text: str) -> str:
+    """Strip 4-space indent from numbered list items that follow a plain paragraph.
+
+    Doxygen allows `    1. item` after a paragraph; CommonMark treats it as an
+    indented code block. Only de-indent when the numbered list is at the top
+    level (not inside a list item). Determined by scanning backwards past other
+    4-space-indented numbered items to find the anchor line: if the anchor is at
+    column 0 and is not a list bullet, we are at the top level and should
+    de-indent.
+    """
+    lines = text.splitlines(keepends=False)
+    _list_bullet = re.compile(r"^[ \t]*(?:[-*+]|\d+\.)[ \t]")
+    _indented_num = re.compile(r"^    (\d+\.)( .+)$")
+    _indented_num_bare = re.compile(r"^    \d+\.")
+
+    def _anchor(idx: int) -> str:
+        j = idx - 1
+        while j >= 0:
+            ln = lines[j]
+            if not ln.strip():
+                j -= 1
+                continue
+            if _indented_num_bare.match(ln):
+                j -= 1
+                continue
+            return ln
+        return ""
+
+    _indented_prose = re.compile(r"^    (\S.*)$")
+
+    in_fence = False
+    out: list[str] = []
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("```"):
+            in_fence = not in_fence
+        if not in_fence:
+            m = _indented_num.match(ln)
+            if m:
+                anchor = _anchor(i)
+                anchor_indent = len(anchor) - len(anchor.lstrip())
+                if anchor_indent == 0 and not _list_bullet.match(anchor):
+                    ln = m.group(1) + m.group(2)
+            else:
+                mp = _indented_prose.match(ln)
+                if mp:
+                    anchor = _anchor(i)
+                    if anchor.rstrip() == "::::":
+                        ln = mp.group(1)
+        out.append(ln)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def _ensure_blank_lines_around_images(text: str) -> str:
+    """Ensure standalone image lines have blank lines before and after them.
+
+    Without surrounding blank lines, Sphinx renders the image inline within
+    the surrounding text paragraph instead of as a block element.
+    """
+    lines = text.splitlines(keepends=False)
+    _img_line = re.compile(r"^\s*!\[.*?\]\(.*?\)\s*$")
+    in_fence = False
+    out: list[str] = []
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("```"):
+            in_fence = not in_fence
+        if not in_fence and _img_line.match(ln):
+            prev = out[-1].strip() if out else ""
+            if prev:
+                out.append("")
+            out.append(ln)
+            nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+            if nxt:
+                out.append("")
+        else:
+            out.append(ln)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def _ensure_blank_lines_around_display_math(text: str) -> str:
+    """Ensure every $$ display-math delimiter has a blank line before and after it.
+
+    Without surrounding blank lines, MyST can misparse inline $...$ on adjacent
+    lines as display math, causing wide spacing around math variables.
+    """
+    lines = text.splitlines(keepends=False)
+    out: list[str] = []
+    for i, ln in enumerate(lines):
+        stripped = ln.strip()
+        if stripped == "$$":
+            prev = out[-1].strip() if out else ""
+            if prev:
+                out.append("")
+            out.append(ln)
+            nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+            if nxt:
+                out.append("")
+        else:
+            out.append(ln)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
 def _convert_images_to_figures(text: str) -> str:
     out: list[str] = []
     pos = 0
-    img_re = re.compile(r"^([ \t]*)!\[([^\]]*)\]\(([^)]+)\)\s*$", re.M)
     in_fence = False
     safe = []
     for ln in text.splitlines(keepends=True):
@@ -887,7 +1081,7 @@ def _convert_images_to_figures(text: str) -> str:
         if in_fence:
             safe.append(ln)
             continue
-        m = re.match(r"^([ \t]*)!\[([^\]]*)\]\(([^)]+)\)\s*$", ln)
+        m = re.match(r"^([ \t]*)!\[(.*?)\]\(([^)]+)\)\s*$", ln)
         if m and m.group(2).strip():
             indent, alt, url = m.group(1), m.group(2), m.group(3)
             safe.append(f"{indent}```{{figure}} {url}\n")

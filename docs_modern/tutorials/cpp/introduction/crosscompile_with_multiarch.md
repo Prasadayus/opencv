@@ -424,6 +424,9 @@ sudo apt install -y \
 If version of runtime libraries and/or programs are incremented, apt package names may be changed
 (e.g. `libswscale6` is used for Ubuntu 23.04, but `libswscale7` is used for Ubuntu 23.10).
 Looking for it with `apt search` command or [https://packages.ubuntu.com/](https://packages.ubuntu.com/) .
+:::
+
+:::{warning}
 External library version between host and target should be same.
 Please update to the latest version libraries at the same time as possible.
 
@@ -436,6 +439,9 @@ For example)
 - libA (v1.1) may be updated.
 - On Target, libA (v1.1) is installed to use OpenCV.
 - In this case, versions of libA is difference between compiling and running.
+:::
+
+:::{warning}
 If you forget/mismatch to install some necessary libraries, OpenCV will not works well.
 
 `ldd` command can detect dependency. If there are any "not found", please install necessary libraries.

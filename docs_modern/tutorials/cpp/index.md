@@ -12,7 +12,7 @@
   - build and install OpenCV on your computer
 * - [The Core Functionality (core module)](core/index.md)
   - basic building blocks of the library
-* - [Image Processing (imgproc module)](https://docs.opencv.org/5.x/d7/da8/tutorial_table_of_content_imgproc.html)
+* - [Image Processing (imgproc module)](imgproc/index.md)
   - image processing functions
 * - [Application utils (highgui, imgcodecs, videoio modules)](https://docs.opencv.org/5.x/d0/de2/tutorial_table_of_content_app.html)
   - application utils (GUI, image/video input/output)
@@ -42,7 +42,7 @@
 
 Introduction to OpenCV <introduction/index>
 The Core Functionality (core module) <core/index>
-Image Processing (imgproc module) <https://docs.opencv.org/5.x/d7/da8/tutorial_table_of_content_imgproc.html>
+Image Processing (imgproc module) <imgproc/index>
 Application utils (highgui, imgcodecs, videoio modules) <https://docs.opencv.org/5.x/d0/de2/tutorial_table_of_content_app.html>
 Camera calibration and 3D reconstruction (calib3d module) <calib3d/index>
 Object Detection (objdetect module) <https://docs.opencv.org/5.x/d2/d64/tutorial_table_of_content_objdetect.html>

@@ -98,7 +98,7 @@ Many kinds of optimizations can be disabled with `CV_DISABLE_OPTIMIZATION` optio
 :::{seealso}
 - [https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html](https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html)
 - [https://gcc.gnu.org/onlinedocs/libstdc++/manual/using_macros.html](https://gcc.gnu.org/onlinedocs/libstdc++/manual/using_macros.html)
-- [https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options](https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options)
+- [opencv/opencv/wiki/CPU-optimizations-build-options](https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options)
 :::
 
 (tutorial_config_reference_general_static)=
@@ -209,7 +209,7 @@ cmake -DCV_DISABLE_OPTIMIZATION=ON ../opencv
 ```
 
 :::{note}
-More details on CPU optimization options can be found in wiki: [https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options](https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options)
+More details on CPU optimization options can be found in wiki: [opencv/opencv/wiki/CPU-optimizations-build-options](https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options)
 :::
 (profiling_coverage_sanitize_hardening_size_optimization)=
 ### Profiling, coverage, sanitize, hardening, size optimization

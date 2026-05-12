@@ -62,380 +62,380 @@ vector). The difference between these is that in a map every element has a uniqu
 you may access it. For sequences you need to go through them to query a specific item.
 
 1. **XML/YAML/JSON File Open and Close.** Before you write any content to such file you need to open it
-and at the end to close it. The XML/YAML/JSON data structure in OpenCV is [cv::FileStorage](https://docs.opencv.org/5.x/da/d56/classcv_1_1FileStorage.html) . To
-specify that this structure to which file binds on your hard drive you can use either its
-constructor or the *open()* function of this:
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   and at the end to close it. The XML/YAML/JSON data structure in OpenCV is [cv::FileStorage](https://docs.opencv.org/5.x/da/d56/classcv_1_1FileStorage.html) . To
+   specify that this structure to which file binds on your hard drive you can use either its
+   constructor or the *open()* function of this:
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: open
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: open
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: open
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: open
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
-Either one of this you use the second argument is a constant specifying the type of operations
-you'll be able to on them: WRITE, READ or APPEND. The extension specified in the file name also
-determinates the output format that will be used. The output may be even compressed if you
-specify an extension such as *.xml.gz*.
+   Either one of this you use the second argument is a constant specifying the type of operations
+   you'll be able to on them: WRITE, READ or APPEND. The extension specified in the file name also
+   determinates the output format that will be used. The output may be even compressed if you
+   specify an extension such as *.xml.gz*.
 
-The file automatically closes when the [cv::FileStorage](https://docs.opencv.org/5.x/da/d56/classcv_1_1FileStorage.html) objects is destroyed. However, you
-may explicitly call for this by using the *release* function:
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   The file automatically closes when the [cv::FileStorage](https://docs.opencv.org/5.x/da/d56/classcv_1_1FileStorage.html) objects is destroyed. However, you
+   may explicitly call for this by using the *release* function:
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: close
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: close
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: close
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: close
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
 1. **Input and Output of text and numbers.** In C++, the data structure uses the \<\< output
-operator in the STL library. In Python, [cv::FileStorage](https://docs.opencv.org/5.x/da/d56/classcv_1_1FileStorage.html).write() is used instead. For
-outputting any type of data structure we need first to specify its name. We do this by just
-simply pushing the name of this to the stream in C++. In Python, the first parameter for the
-write function is the name. For basic types you may follow this with the print of the value :
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   operator in the STL library. In Python, [cv::FileStorage](https://docs.opencv.org/5.x/da/d56/classcv_1_1FileStorage.html).write() is used instead. For
+   outputting any type of data structure we need first to specify its name. We do this by just
+   simply pushing the name of this to the stream in C++. In Python, the first parameter for the
+   write function is the name. For basic types you may follow this with the print of the value :
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: writeNum
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: writeNum
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: writeNum
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: writeNum
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
-Reading in is a simple addressing (via the [] operator) and casting operation or a read via
-the \>\> operator. In Python, we address with getNode() and use real() :
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   Reading in is a simple addressing (via the [] operator) and casting operation or a read via
+   the \>\> operator. In Python, we address with getNode() and use real() :
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: readNum
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: readNum
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: readNum
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: readNum
+   :language: cpp
+   ```
 
-:::
-::::
+   :::
+   ::::
 
 1. **Input/Output of OpenCV Data structures.** Well these behave exactly just as the basic C++
-and Python types:
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   and Python types:
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: iomati
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: iomati
+   :language: cpp
+   ```
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: iomatw
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: iomatw
+   :language: cpp
+   ```
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: iomat
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: iomat
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: iomati
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: iomati
+   :language: python
+   ```
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: iomatw
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: iomatw
+   :language: python
+   ```
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: iomat
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: iomat
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
 1. **Input/Output of vectors (arrays) and associative maps.** As I mentioned beforehand, we can
-output maps and sequences (array, vector) too. Again we first print the name of the variable and
-then we have to specify if our output is either a sequence or map.
+   output maps and sequences (array, vector) too. Again we first print the name of the variable and
+   then we have to specify if our output is either a sequence or map.
 
-For sequence before the first element print the "[" character and after the last one the "]"
-character. With Python, call `FileStorage.startWriteStruct(structure_name, struct_type)`,
-where `struct_type` is `cv2.FileNode_MAP` or `cv2.FileNode_SEQ` to start writing the structure.
-Call `FileStorage.endWriteStruct()` to finish the structure:
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   For sequence before the first element print the "[" character and after the last one the "]"
+   character. With Python, call `FileStorage.startWriteStruct(structure_name, struct_type)`,
+   where `struct_type` is `cv2.FileNode_MAP` or `cv2.FileNode_SEQ` to start writing the structure.
+   Call `FileStorage.endWriteStruct()` to finish the structure:
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: writeStr
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: writeStr
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: writeStr
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: writeStr
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
-For maps the drill is the same however now we use the "{" and "}" delimiter characters:
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   For maps the drill is the same however now we use the "{" and "}" delimiter characters:
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: writeMap
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: writeMap
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: writeMap
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: writeMap
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
-To read from these we use the [cv::FileNode](https://docs.opencv.org/5.x/de/dd9/classcv_1_1FileNode.html) and the [cv::FileNodeIterator](https://docs.opencv.org/5.x/d7/d4e/classcv_1_1FileNodeIterator.html) data
-structures. The [] operator of the [cv::FileStorage](https://docs.opencv.org/5.x/da/d56/classcv_1_1FileStorage.html) class (or the getNode() function in Python) returns a [cv::FileNode](https://docs.opencv.org/5.x/de/dd9/classcv_1_1FileNode.html) data
-type. If the node is sequential we can use the [cv::FileNodeIterator](https://docs.opencv.org/5.x/d7/d4e/classcv_1_1FileNodeIterator.html) to iterate through the
-items. In Python, the at() function can be used to address elements of the sequence and the
-size() function returns the length of the sequence:
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   To read from these we use the [cv::FileNode](https://docs.opencv.org/5.x/de/dd9/classcv_1_1FileNode.html) and the [cv::FileNodeIterator](https://docs.opencv.org/5.x/d7/d4e/classcv_1_1FileNodeIterator.html) data
+   structures. The [] operator of the [cv::FileStorage](https://docs.opencv.org/5.x/da/d56/classcv_1_1FileStorage.html) class (or the getNode() function in Python) returns a [cv::FileNode](https://docs.opencv.org/5.x/de/dd9/classcv_1_1FileNode.html) data
+   type. If the node is sequential we can use the [cv::FileNodeIterator](https://docs.opencv.org/5.x/d7/d4e/classcv_1_1FileNodeIterator.html) to iterate through the
+   items. In Python, the at() function can be used to address elements of the sequence and the
+   size() function returns the length of the sequence:
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: readStr
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: readStr
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: readStr
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: readStr
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
-For maps you can use the [] operator (at() function in Python) again to access the given item (or the \>\> operator too):
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   For maps you can use the [] operator (at() function in Python) again to access the given item (or the \>\> operator too):
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: readMap
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: readMap
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: readMap
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: readMap
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
 1. **Read and write your own data structures.** Suppose you have a data structure such as:
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```cpp
-class MyData
-{
-public:
-      MyData() : A(0), X(0), id() {}
-public:   // Data Members
-   int A;
-   double X;
-   string id;
-};
-```
+   ```cpp
+   class MyData
+   {
+   public:
+         MyData() : A(0), X(0), id() {}
+   public:   // Data Members
+      int A;
+      double X;
+      string id;
+   };
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```py
-class MyData:
-    def __init__(self):
-        self.A = self.X = 0
-        self.name = ''
-```
+   ```py
+   class MyData:
+       def __init__(self):
+           self.A = self.X = 0
+           self.name = ''
+   ```
 
-:::
-::::
+   :::
+   ::::
 
-In C++, it's possible to serialize this through the OpenCV I/O XML/YAML interface (just as
-in case of the OpenCV data structures) by adding a read and a write function inside and outside of your
-class. In Python, you can get close to this by implementing a read and write function inside
-the class. For the inside part:
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   In C++, it's possible to serialize this through the OpenCV I/O XML/YAML interface (just as
+   in case of the OpenCV data structures) by adding a read and a write function inside and outside of your
+   class. In Python, you can get close to this by implementing a read and write function inside
+   the class. For the inside part:
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: inside
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: inside
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: inside
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: inside
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
-In C++, you need to add the following functions definitions outside the class:
+   In C++, you need to add the following functions definitions outside the class:
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: outside
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: outside
+   :language: cpp
+   ```
 
-Here you can observe that in the read section we defined what happens if the user tries to read
-a non-existing node. In this case we just return the default initialization value, however a
-more verbose solution would be to return for instance a minus one value for an object ID.
+   Here you can observe that in the read section we defined what happens if the user tries to read
+   a non-existing node. In this case we just return the default initialization value, however a
+   more verbose solution would be to return for instance a minus one value for an object ID.
 
-Once you added these four functions use the \>\> operator for write and the \<\< operator for
-read (or the defined input/output functions for Python):
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   Once you added these four functions use the \>\> operator for write and the \<\< operator for
+   read (or the defined input/output functions for Python):
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: customIOi
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: customIOi
+   :language: cpp
+   ```
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: customIOw
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: customIOw
+   :language: cpp
+   ```
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: customIO
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: customIO
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: customIOi
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: customIOi
+   :language: python
+   ```
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: customIOw
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: customIOw
+   :language: python
+   ```
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: customIO
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: customIO
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
-Or to try out reading a non-existing read:
-::::{tab-set}
-:::{tab-item} C++
-:sync: cpp
+   Or to try out reading a non-existing read:
+   ::::{tab-set}
+   :::{tab-item} C++
+   :sync: cpp
 
-```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
-:tag: nonexist
-:language: cpp
-```
+   ```{doxysnippet} cpp/tutorial_code/core/file_input_output/file_input_output.cpp
+   :tag: nonexist
+   :language: cpp
+   ```
 
-:::
-:::{tab-item} Python
-:sync: python
+   :::
+   :::{tab-item} Python
+   :sync: python
 
-```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
-:tag: nonexist
-:language: python
-```
+   ```{doxysnippet} python/tutorial_code/core/file_input_output/file_input_output.py
+   :tag: nonexist
+   :language: python
+   ```
 
-:::
-::::
+   :::
+   ::::
 
 ## Result
 

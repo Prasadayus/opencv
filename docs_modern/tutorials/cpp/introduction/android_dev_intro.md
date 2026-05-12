@@ -57,7 +57,8 @@ Here's how to get a ready to work environment:
 2. Install fresh Android SDK and NDK:
     1. Open SDK manager in Android Studio (***Customize -> All Settings -> Languages & Frameworks -> Android SDK***)
     2. Enable "Show Package Details" checkbox
-    ![](images/sdk_ndk_manager.png)
+
+       ![](images/sdk_ndk_manager.png)
     3. Check SDK and NDK of the latest versions and press OK
     4. Make sure that your device support the chosen SDK versions
 
@@ -74,7 +75,8 @@ or [SourceForge](https://sourceforge.net/projects/opencvlibrary/).
 4. Connect your device
     * Debugging should be enabled on a device, you can find an instruction about it across the web
     * Alternatively you can use a virtual device that comes with the Android studio
-    ![](images/choose_device.png)
+
+      ![](images/choose_device.png)
 5. Choose a sample from the drop-down menu (for example, `15-puzzle`) and run it.
 
 ## Setup Device for Testing and Debugging

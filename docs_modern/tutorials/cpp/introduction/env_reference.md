@@ -85,7 +85,7 @@ See also:
 | OPENCV_SAMPLES_DATA_PATH | paths | | paths for findDataFile |
 
 Links:
-- [https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options](https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options)
+- [opencv/opencv/wiki/CPU-optimizations-build-options](https://github.com/opencv/opencv/wiki/CPU-optimizations-build-options)
 
 
 ## Logging
@@ -189,7 +189,7 @@ Some external dependencies can be detached into a dynamic library, which will be
 | OPENCV_OPENCL_SVM_BUFFERPOOL_LIMIT | num | | same as OPENCV_OPENCL_BUFFERPOOL_LIMIT, but for SVM buffers |
 
 ### Links:
-- [https://github.com/opencv/opencv/wiki/OpenCL-optimizations](https://github.com/opencv/opencv/wiki/OpenCL-optimizations)
+- [opencv/opencv/wiki/OpenCL-optimizations](https://github.com/opencv/opencv/wiki/OpenCL-optimizations)
 
 
 ## Tracing/Profiling
@@ -207,7 +207,7 @@ Some external dependencies can be detached into a dynamic library, which will be
 | OPENCV_TRACE_ITT_SET_THREAD_NAME | bool | false | set name for OpenCV's threads "OpenCVThread-%03d" |
 
 ### Links:
-- [https://github.com/opencv/opencv/wiki/Profiling-OpenCV-Applications](https://github.com/opencv/opencv/wiki/Profiling-OpenCV-Applications)
+- [opencv/opencv/wiki/Profiling-OpenCV-Applications](https://github.com/opencv/opencv/wiki/Profiling-OpenCV-Applications)
 
 
 ## Cache
@@ -270,7 +270,7 @@ Some external dependencies can be detached into a dynamic library, which will be
 | ⭐ OPENCV_PYTEST_FILTER | string (glob) | | test filter for Python tests |
 
 ### Links:
-- [https://github.com/opencv/opencv/wiki/QA_in_OpenCV](https://github.com/opencv/opencv/wiki/QA_in_OpenCV)
+- [opencv/opencv/wiki/QA_in_OpenCV](https://github.com/opencv/opencv/wiki/QA_in_OpenCV)
 
 
 ## videoio

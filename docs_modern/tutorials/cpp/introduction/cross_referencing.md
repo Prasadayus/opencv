@@ -40,7 +40,7 @@ This functions returns a [cv::Mat](https://docs.opencv.org/5.x/d3/d63/classcv_1_
 :::
 To generate links to the OpenCV documentation inside your project, you only
 have to perform two small steps. First download the file
-[opencv.tag](opencv.tag) (right-click and choose "save as...") and place it
+[opencv.tag](https://docs.opencv.org/5.x/opencv.tag) (right-click and choose "save as...") and place it
 somewhere in your project directory, for example as
 `docs/doxygen-tags/opencv.tag`.
 
@@ -69,4 +69,4 @@ contain a `your_project.tag` file in its root directory.
 ## References
 
 - [Doxygen: Linking to external documentation](http://www.doxygen.nl/manual/external.html)
-- [opencv.tag](opencv.tag)
+- [opencv.tag](https://docs.opencv.org/5.x/opencv.tag)

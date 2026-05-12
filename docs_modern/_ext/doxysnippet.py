@@ -17,10 +17,11 @@ from sphinx.util.docutils import SphinxDirective
 
 _MARKER_RE_TEMPLATE = (
     r"^\s*(?:"
-    r"//!|//|#+|"              # C/C++/Python/shell line comments (`#`, `##`, etc.)
-    r"<!--\s*|\*\s*|/\*\s*"   # HTML/XML and C block-comment styles
+    r"//!|//|#+|"                    # C/C++/Python/shell line comments
+    r"<!--\s*(?://!?\s*)?|"          # HTML/XML comment, optionally prefixed with //! (e.g. <!-- //! [tag] -->)
+    r"\*\s*|/\*\s*"                  # C block-comment styles
     r")\s*\[{tag}\]"
-    r"\s*(?:-->|\*/)?\s*$"     # optional comment closers
+    r"\s*(?:-->|\*/)?\s*$"           # optional comment closers
 )
 
 
@@ -33,15 +34,29 @@ def _resolve_source(app, rel: str) -> Path | None:
     direct = repo / rel
     if direct.exists():
         return direct
-    name = Path(rel).name
+    rel_parts = Path(rel).parts  # e.g. ('android', 'mobilenet-objdetect', 'gradle', 'AndroidManifest.xml')
+    name = rel_parts[-1]
     search_roots = getattr(app.config, "doxysnippet_search_paths", None) or [
         "samples", "apps", "modules", "doc/tutorials", "doc",
     ]
+    best: Path | None = None
+    best_score = -1
     for root in search_roots:
         for hit in (repo / root).rglob(name):
-            if hit.is_file():
-                return hit
-    return None
+            if not hit.is_file():
+                continue
+            # Score = number of rel_parts components that appear as a suffix of hit.parts
+            hit_parts = hit.parts
+            score = 0
+            for k in range(1, len(rel_parts) + 1):
+                if hit_parts[-k:] == rel_parts[-k:]:
+                    score = k
+                else:
+                    break
+            if score > best_score:
+                best_score = score
+                best = hit
+    return best
 
 
 class DoxySnippetDirective(SphinxDirective):

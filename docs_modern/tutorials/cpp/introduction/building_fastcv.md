@@ -40,12 +40,12 @@ OpenCV and FastCV integration is implemented in two ways:
 
 ## Supported Platforms
 
-1. Android : Qualcomm Chipsets with the Android from Snapdragon 8 Gen 1 onwards(https://www.qualcomm.com/products/mobile/snapdragon/smartphones#product-list)
+1. Android : Qualcomm Chipsets with the Android from [Snapdragon 8 Gen 1 onwards](https://www.qualcomm.com/products/mobile/snapdragon/smartphones#product-list)
 2. Linux   : Qualcomm Linux Program related boards mentioned in [Hardware](https://www.qualcomm.com/developer/software/qualcomm-linux/hardware)
 
 ## Compiling OpenCV with FastCV for Android
 
-1. **Follow Wiki page for OpenCV Compilation** : [https://github.com/opencv/opencv/wiki/Custom-OpenCV-Android-SDK-and-AAR-package-build](https://github.com/opencv/opencv/wiki/Custom-OpenCV-Android-SDK-and-AAR-package-build)
+1. **Follow Wiki page for OpenCV Compilation** : [opencv/opencv/wiki/Custom-OpenCV-Android-SDK-and-AAR-package-build](https://github.com/opencv/opencv/wiki/Custom-OpenCV-Android-SDK-and-AAR-package-build)
 
  Once the OpenCV repository code is cloned into the workspace, please add `-DWITH_FASTCV=ON` flag to cmake vars as below to arm64 entry
  in `opencv/platforms/android/default.config.py` or create new one with the option to enable FastCV HAL and/or extenstions compilation:
@@ -61,6 +61,7 @@ OpenCV and FastCV integration is implemented in two ways:
 :::{note}
 Only Ubuntu 22.04 is supported as host platform for eSDK deployment.
 :::
+
 1. Install eSDK by following [Qualcomm® Linux Documentation](https://docs.qualcomm.com/bundle/publicresource/topics/80-70017-51/install-sdk.html)
 
 2. After installing the eSDK, set the ESDK_ROOT:
@@ -69,57 +70,63 @@ Only Ubuntu 22.04 is supported as host platform for eSDK deployment.
    export ESDK_ROOT=<eSDK install location>
    ```
 
-3.  Add SDK tools and libraries to your environment:
+3. Add SDK tools and libraries to your environment:
 
-  ```
-  source environment-setup-armv8-2a-qcom-linux
-  ```
+   ```
+   source environment-setup-armv8-2a-qcom-linux
+   ```
 
-  If you encounter the following message:
-  ```
-  Your environment is misconfigured, you probably need to 'unset LD_LIBRARY_PATH'
-  but please check why this was set in the first place and that it's safe to unset.
-  The SDK will not operate correctly in most cases when LD_LIBRARY_PATH is set.
-  ```
-  just unset your host `LD_LIBRARY_PATH` environment variable: `unset LD_LIBRARY_PATH`.
+   If you encounter the following message:
+
+   ```
+   Your environment is misconfigured, you probably need to 'unset LD_LIBRARY_PATH'
+   but please check why this was set in the first place and that it's safe to unset.
+   The SDK will not operate correctly in most cases when LD_LIBRARY_PATH is set.
+   ```
+
+   just unset your host `LD_LIBRARY_PATH` environment variable: `unset LD_LIBRARY_PATH`.
 
 4. Clone OpenCV Repositories:
 
-  Clone the OpenCV main and optionally opencv_contrib repositories into any directory
-  (it does not need to be inside the SDK directory).
+   Clone the OpenCV main and optionally opencv_contrib repositories into any directory
+   (it does not need to be inside the SDK directory).
 
-  ```
-  git clone https://github.com/opencv/opencv.git
-  git clone https://github.com/opencv/opencv_contrib.git
-  ```
+   ```
+   git clone https://github.com/opencv/opencv.git
+   git clone https://github.com/opencv/opencv_contrib.git
+   ```
 
 5. Build OpenCV
 
-  Create a build directory, navigate into it and build the project with CMake there:
+   Create a build directory, navigate into it and build the project with CMake there:
 
-  ```
-  mkdir build
-  cd build
-  cmake -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DWITH_FASTCV=ON -DBUILD_SHARED_LIBS=ON -DOPENCV_EXTRA_MODULES_PATH=../opencv_contrib/modules/fastcv/ ../opencv
-  make -j$(nproc)
-  ```
+   ```
+   mkdir build
+   cd build
+   cmake -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DWITH_FASTCV=ON -DBUILD_SHARED_LIBS=ON -DOPENCV_EXTRA_MODULES_PATH=../opencv_contrib/modules/fastcv/ ../opencv
+   make -j$(nproc)
+   ```
 
-  If the FastCV library is updated, please replace the old FastCV libraries located at:
-  ```
-  <ESDK_PATH>\qcom-wayland_sdk\tmp\sysroots\qcs6490-rb3gen2-vision-kit\usr\lib
-  ```
-  with the latest FastCV libraries downloaded in:
-  ```
-  build\3rdparty\fastcv\libs
-  ```
+   If the FastCV library is updated, please replace the old FastCV libraries located at:
+
+   ```
+   <ESDK_PATH>\qcom-wayland_sdk\tmp\sysroots\qcs6490-rb3gen2-vision-kit\usr\lib
+   ```
+
+   with the latest FastCV libraries downloaded in:
+
+   ```
+   build\3rdparty\fastcv\libs
+   ```
 
 6. Validate
 
-  Push the OpenCV libraries, test binaries and test data on to the target. Execute the OpenCV conformance or performance tests.
-  During runtime, If libwebp.so.7 lib is missing, find the lib in the below Path and push it on the target
-```
-<ESDK_PATH>\qcom-wayland_sdk\tmp\sysroots\qcs6490-rb3gen2-vision-kit\usr\lib\libwebp.so.7
-```
+   Push the OpenCV libraries, test binaries and test data on to the target. Execute the OpenCV conformance or performance tests.
+   During runtime, If libwebp.so.7 lib is missing, find the lib in the below Path and push it on the target
+
+   ```
+   <ESDK_PATH>\qcom-wayland_sdk\tmp\sysroots\qcs6490-rb3gen2-vision-kit\usr\lib\libwebp.so.7
+   ```
 
 ## HAL and Extension list of APIs
 

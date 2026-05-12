@@ -81,59 +81,59 @@ git clone https://github.com/opencv/opencv_contrib.git
 ## Building OpenCV from Source Using CMake
 
 1. Create a temporary directory, which we denote as `build_opencv`, where you want to put
-the generated Makefiles, project files as well the object files and output binaries and enter
-there.
+   the generated Makefiles, project files as well the object files and output binaries and enter
+   there.
 
-For example:
+   For example:
 
-```bash
-mkdir build_opencv
-cd build_opencv
-```
+   ```bash
+   mkdir build_opencv
+   cd build_opencv
+   ```
 
-:::{note}
-It is good practice to keep your source code directories clean. Create the build directory outside of the source tree.
-:::
+   :::{note}
+   It is good practice to keep your source code directories clean. Create the build directory outside of the source tree.
+   :::
+
 1. Configuring. Run `cmake [<some optional parameters>] <path to the OpenCV source directory>`
 
-For example:
+   For example:
 
-```bash
-cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON ../opencv
-```
+   ```bash
+   cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON ../opencv
+   ```
 
-Alternatively, you can use the CMake GUI (`cmake-gui`):
+   Alternatively, you can use the CMake GUI (`cmake-gui`):
 
--   set the OpenCV source code path to, e.g. `/Users/your_username/opencv`
--   set the binary build path to your CMake build directory, e.g. `/Users/your_username/build_opencv`
--   set optional parameters
--   run: "Configure"
--   run: "Generate"
+   -   set the OpenCV source code path to, e.g. `/Users/your_username/opencv`
+   -   set the binary build path to your CMake build directory, e.g. `/Users/your_username/build_opencv`
+   -   set optional parameters
+   -   run: "Configure"
+   -   run: "Generate"
 
 1. Description of some parameters
--   build type: `-DCMAKE_BUILD_TYPE=Release` (or `Debug`).
--   include Extra Modules: If you cloned the `opencv_contrib` repository and want to include its modules, set:
+   -   build type: `-DCMAKE_BUILD_TYPE=Release` (or `Debug`).
+   -   include Extra Modules: If you cloned the `opencv_contrib` repository and want to include its modules, set:
 
-    ```bash
-    -DOPENCV_EXTRA_MODULES_PATH=../opencv_contrib/modules
+       ```bash
+       -DOPENCV_EXTRA_MODULES_PATH=../opencv_contrib/modules
+       ```
 
-    ```
-
--   set `-DBUILD_DOCS=ON` for building documents (doxygen is required)
--   set `-DBUILD_EXAMPLES=ON` to build all examples
+   -   set `-DBUILD_DOCS=ON` for building documents (doxygen is required)
+   -   set `-DBUILD_EXAMPLES=ON` to build all examples
 
 1. [optional] Building python. Set the following python parameters:
--   `-DPYTHON3_EXECUTABLE=$(which python3)`
--   `-DPYTHON3_INCLUDE_DIR=$(python3 -c "from sysconfig import get_paths as gp; print(gp()['include'])")`
--   `-DPYTHON3_NUMPY_INCLUDE_DIRS=$(python3 -c "import numpy; print(numpy.get_include())")`
+   -   `-DPYTHON3_EXECUTABLE=$(which python3)`
+   -   `-DPYTHON3_INCLUDE_DIR=$(python3 -c "from sysconfig import get_paths as gp; print(gp()['include'])")`
+   -   `-DPYTHON3_NUMPY_INCLUDE_DIRS=$(python3 -c "import numpy; print(numpy.get_include())")`
 
 1. Build. From build directory execute *make*, it is recommended to do this in several threads
 
-For example:
+   For example:
 
-```bash
-make -j$(sysctl -n hw.ncpu) # runs the build using all available CPU cores
-```
+   ```bash
+   make -j$(sysctl -n hw.ncpu) # runs the build using all available CPU cores
+   ```
 
 1. After building, you can install OpenCV system-wide using:
 
@@ -143,11 +143,11 @@ make -j$(sysctl -n hw.ncpu) # runs the build using all available CPU cores
 
 1. To use OpenCV in your CMake-based projects through `find_package(OpenCV)`, specify the `OpenCV_DIR` variable pointing to the build or install directory.
 
-For example:
+   For example:
 
-```bash
-cmake -DOpenCV_DIR=~/build_opencv ..
-```
+   ```bash
+   cmake -DOpenCV_DIR=~/build_opencv ..
+   ```
 
 #### Verifying the OpenCV Installation
 
