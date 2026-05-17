@@ -113,3 +113,18 @@ exhale_args = {
     "createTreeView":       True,
     "exhaleExecutesDoxygen": False,
 }
+
+def setup(app):
+    # exhale 0.3.x skips os.makedirs before writing RST files; patch to fix first-run failure
+    import exhale.graph as _eg
+    _orig = _eg.ExhaleRoot.generateSingleNodeRST
+
+    def _patched(self, node):
+        os.makedirs(os.path.dirname(node.file_name), exist_ok=True)
+        return _orig(self, node)
+
+    _eg.ExhaleRoot.generateSingleNodeRST = _patched
+
+    # breathe 4.36.x cpp_classes missing "property" kind from Doxygen XML; map to var
+    from breathe.renderer.sphinxrenderer import DomainDirectiveFactory, CPPMemberObject
+    DomainDirectiveFactory.cpp_classes.setdefault("property", (CPPMemberObject, "var"))

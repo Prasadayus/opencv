@@ -222,6 +222,12 @@ if(DOXYGEN_FOUND)
   set(OPENCV_DOCS_DOXYFILE_IN "Doxyfile.in" CACHE PATH "Doxygen configuration template file (Doxyfile.in)")
   set(OPENCV_DOCS_DOXYGEN_LAYOUT "DoxygenLayout.xml" CACHE PATH "Doxygen layout file (.xml)")
 
+  if(BUILD_DOCS_MODERN)
+    set(OPENCV_DOXYGEN_GENERATE_XML YES)
+  else()
+    set(OPENCV_DOXYGEN_GENERATE_XML NO)
+  endif()
+
   # writing file
   configure_file("${OPENCV_DOCS_DOXYGEN_LAYOUT}" DoxygenLayout.xml @ONLY)
   configure_file("${OPENCV_DOCS_DOXYFILE_IN}" ${doxyfile} @ONLY)

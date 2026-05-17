@@ -27,6 +27,7 @@ endif()
 
 add_custom_target(opencv_docs_modern
   COMMAND ${CMAKE_COMMAND} -E make_directory "${MODERN_DOCS_OUT}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${MODERN_DOCS_SRC}/api"
   COMMAND ${SPHINX_BUILD_EXECUTABLE} -b html -E
           -D opencv_tagfile=${MODERN_DOCS_TAG}
           -D breathe_projects.OpenCV=${MODERN_DOCS_DOXYGEN_XML}
