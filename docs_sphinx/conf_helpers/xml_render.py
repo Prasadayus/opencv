@@ -208,10 +208,7 @@ def _build_api_hierarchy(refid: str, xml_dir: pathlib.Path,
     # Detailed description (used on parent index pages; breathe handles it
     # on leaf pages, so we extract it for context-display only).
     detailed_el = cd.find("detaileddescription")
-    detailed = ""
-    if detailed_el is not None:
-        paras = [_itertext(p) for p in detailed_el.findall("para")]
-        detailed = "\n\n".join(p for p in paras if p)
+    detailed = _doxygen_desc_to_md(detailed_el) if detailed_el is not None else ""
     # Inner classes (public only). One read per class's XML for its brief.
     # `qualified` is what `{doxygenclass}` needs (e.g. cv::ocl::Context); the
     # innerclass element's text already carries that, but normalize spaces.
@@ -242,6 +239,229 @@ def _build_api_hierarchy(refid: str, xml_dir: pathlib.Path,
     return {"name": name, "title": title, "detailed": detailed,
             "innerclasses": innerclasses, "sections": sections,
             "children": children}
+
+
+def _type_to_md(type_elem) -> str:
+    """Render <type> XML as Markdown; turns <ref> children into links."""
+    if type_elem is None:
+        return ""
+    out = type_elem.text or ""
+    for child in type_elem:
+        if child.tag == "ref":
+            word = (child.text or "").strip()
+            refid = child.get("refid", "")
+            kindref = child.get("kindref", "")
+            if kindref == "compound" and refid in _ANCHOR_TO_DOC:
+                fn = _ANCHOR_TO_DOC[refid].split("/")[-1]
+                out += f"[{word}]({fn}.md)"
+            elif refid:
+                out += f"[{word}](#{refid})"
+            else:
+                out += word
+        out += child.tail or ""
+    return out.strip()
+
+
+def _doxygen_desc_to_md(el, h_level: int = 3) -> str:
+    """Convert a Doxygen <detaileddescription> element to Markdown."""
+    if el is None:
+        return ""
+
+    def _hl_text(hl_node) -> str:
+        parts = []
+        if hl_node.text:
+            parts.append(hl_node.text)
+        for child in hl_node:
+            if child.tag == "sp":
+                parts.append(" ")
+            else:
+                parts.append("".join(child.itertext()))
+            if child.tail:
+                parts.append(child.tail)
+        return "".join(parts)
+
+    def _programlisting(node) -> str:
+        lines = []
+        for codeline in node.findall("codeline"):
+            lines.append("".join(_hl_text(hl) for hl in codeline.findall("highlight")))
+        return "```cpp\n" + "\n".join(lines) + "\n```"
+
+    def _ref_link(refid: str, text: str) -> str:
+        if not (refid and text):
+            return f"`{text}`" if text else ""
+        m = re.search(r'_1([a-z]{1,3}[0-9a-f]{20,})$', refid)
+        if m:
+            url = f"{DOXYGEN_BASE_URL}{refid[:m.start()]}.html#{m.group(1)}"
+        else:
+            url = f"{DOXYGEN_BASE_URL}{refid}.html"
+        return f"[`{text}`]({url})"
+
+    _BLOCK_TAGS = {"orderedlist", "itemizedlist", "programlisting", "simplesect", "table"}
+
+    def _emit_block(sub, result: list, level: int) -> None:
+        t = sub.tag
+        if t == "programlisting":
+            result.append(_programlisting(sub))
+        elif t == "orderedlist":
+            for i, item in enumerate(sub.findall("listitem"), 1):
+                result.append(f"{i}. {_listitem_text(item)}")
+        elif t == "itemizedlist":
+            for item in sub.findall("listitem"):
+                result.append(f"- {_listitem_text(item)}")
+        elif t == "simplesect":
+            kind = sub.get("kind", "")
+            admon = {"note": "note", "warning": "warning",
+                     "attention": "warning", "remark": "note"}.get(kind)
+            body = "\n\n".join(_blocks(sub, level))
+            if admon:
+                result.append(f":::{{{admon}}}\n{body}\n:::")
+            elif body:
+                result.append(body)
+        elif t == "table":
+            rows = sub.findall("row")
+            if not rows:
+                return
+            md_rows = []
+            for row in rows:
+                cells = [" ".join(_blocks(e, level)).replace("|", "\\|").replace("\n", " ").strip()
+                         for e in row.findall("entry")]
+                md_rows.append("| " + " | ".join(cells) + " |")
+            has_header = (rows[0].find("entry") is not None
+                          and rows[0].find("entry").get("thead") == "yes")
+            if has_header and md_rows:
+                cols = len(rows[0].findall("entry"))
+                table_lines = [md_rows[0], "| " + " | ".join(["----"] * cols) + " |"] + md_rows[1:]
+            else:
+                table_lines = md_rows
+            result.append("\n".join(table_lines))
+
+    def _listitem_text(item) -> str:
+        parts = []
+        for child in item:
+            if child.tag == "para":
+                parts.append(_inline(child).strip())
+        return " ".join(p for p in parts if p)
+
+    def _inline(node) -> str:
+        parts = []
+        if node.text:
+            parts.append(node.text)
+        for child in node:
+            t = child.tag
+            if t in _BLOCK_TAGS:
+                break
+            inner = "".join(child.itertext())
+            if t == "ulink":
+                url = child.get("url", "")
+                parts.append(f"[{inner}]({url})" if url else inner)
+            elif t == "ref":
+                parts.append(_ref_link(child.get("refid", ""), inner))
+            elif t == "computeroutput":
+                parts.append(f"`{inner}`" if inner else "")
+            elif t == "emphasis":
+                parts.append(f"*{inner}*" if inner else "")
+            elif t in ("bold", "strong"):
+                parts.append(f"**{inner}**" if inner else "")
+            elif t == "sp":
+                parts.append(" ")
+            elif t == "linebreak":
+                parts.append("\n")
+            else:
+                parts.append(inner)
+            if child.tail:
+                parts.append(child.tail)
+        return "".join(parts)
+
+    def _blocks(node, level: int) -> list[str]:
+        result = []
+        children = list(node)
+        i = 0
+        while i < len(children):
+            child = children[i]
+            t = child.tag
+            if t == "title":
+                i += 1
+                continue
+            elif t == "simplesect":
+                # Merge consecutive simplesects of the same kind into one admonition.
+                kind = child.get("kind", "")
+                admon = {"note": "note", "warning": "warning",
+                         "attention": "warning", "remark": "note"}.get(kind)
+                bodies = []
+                while (i < len(children) and children[i].tag == "simplesect"
+                       and children[i].get("kind", "") == kind):
+                    bodies.append("\n\n".join(_blocks(children[i], level)))
+                    i += 1
+                body = "\n\n".join(b for b in bodies if b)
+                if admon and body:
+                    result.append(f":::{{{admon}}}\n{body}\n:::")
+                elif body:
+                    result.append(body)
+                continue
+            elif t == "para":
+                pending: list[str] = []
+                if child.text:
+                    pending.append(child.text)
+                for sub in child:
+                    if sub.tag in _BLOCK_TAGS:
+                        text = "".join(pending).strip()
+                        if text:
+                            result.append(text)
+                        pending = []
+                        _emit_block(sub, result, level)
+                        if sub.tail and sub.tail.strip():
+                            pending.append(sub.tail)
+                    else:
+                        inner = "".join(sub.itertext())
+                        st = sub.tag
+                        if st == "ulink":
+                            url = sub.get("url", "")
+                            pending.append(f"[{inner}]({url})" if url else inner)
+                        elif st == "ref":
+                            pending.append(_ref_link(sub.get("refid", ""), inner))
+                        elif st == "computeroutput":
+                            pending.append(f"`{inner}`" if inner else "")
+                        elif st == "emphasis":
+                            pending.append(f"*{inner}*" if inner else "")
+                        elif st in ("bold", "strong"):
+                            pending.append(f"**{inner}**" if inner else "")
+                        elif st == "sp":
+                            pending.append(" ")
+                        elif st == "linebreak":
+                            pending.append("\n")
+                        else:
+                            pending.append(inner)
+                        if sub.tail:
+                            pending.append(sub.tail)
+                text = "".join(pending).strip()
+                if text:
+                    result.append(text)
+            elif t in ("sect1", "sect2", "sect3"):
+                title_text = child.findtext("title") or ""
+                if title_text:
+                    result.append(f"{'#' * level} {title_text}")
+                    result.extend(_blocks(child, level + 1))
+                else:
+                    result.extend(_blocks(child, level))
+            elif t in _BLOCK_TAGS:
+                _emit_block(child, result, level)
+            i += 1
+        return result
+
+    # Merge consecutive same-kind admonitions (e.g. two note paras → one box).
+    raw = [b for b in _blocks(el, h_level) if b.strip()]
+    merged: list[str] = []
+    for block in raw:
+        if merged and block.startswith(":::") and merged[-1].startswith(":::"):
+            prev_kind = merged[-1].split("\n", 1)[0]
+            cur_kind = block.split("\n", 1)[0]
+            if prev_kind == cur_kind:
+                inner_prev = merged[-1][len(prev_kind)+1:-3].strip()
+                inner_cur = block[len(cur_kind)+1:-3].strip()
+                merged[-1] = f"{prev_kind}\n{inner_prev}\n\n{inner_cur}\n:::"
+                continue
+        merged.append(block)
+    return "\n\n".join(merged)
 
 
 def _md_escape_cell(text: str) -> str:
@@ -801,7 +1021,10 @@ def _build_ns_group_map(all_refids: list[str],
             if ns_cd is None:
                 continue
             ns_name = (ns_cd.findtext("compoundname") or "").strip()
-            if any(p in ns_name.split("::") for p in ("detail", "internal", "impl")):
+            if not ns_name:
+                continue
+            if not (ns_cd.findall("sectiondef") or ns_cd.findall("innerclass")
+                    or ns_cd.findall("innernamespace")):
                 continue
             ns_to_groups.setdefault(ns_name, set()).add(cname)
     return ns_to_groups
@@ -835,11 +1058,7 @@ def _namespaces_for_group(group_name: str, xml_dir: pathlib.Path,
         if cd is None:
             continue
         brief = _itertext(cd.find("briefdescription"))
-        detailed_el = cd.find("detaileddescription")
-        detailed = "\n\n".join(
-            p for p in (_itertext(e) for e in
-                        (detailed_el.findall("para") if detailed_el is not None else []))
-            if p)
+        detailed = _doxygen_desc_to_md(cd.find("detaileddescription"))
         out.append({"name": ns_name, "refid": cd.get("id", ""),
                     "brief": brief, "detailed": detailed})
     return out
@@ -889,7 +1108,8 @@ def _namespace_innerclasses(ns_name: str, xml_dir: pathlib.Path) -> list[tuple]:
 
 
 __all__ = [
-    "_itertext", "_MEMBERDEF_SECTIONS", "_read_class_brief",
+    "_itertext", "_type_to_md", "_doxygen_desc_to_md",
+    "_MEMBERDEF_SECTIONS", "_read_class_brief",
     "_build_api_hierarchy", "_parse_member_sections", "_md_escape_cell",
     "_MEMBER_DIRECTIVE", "_MEMBER_DETAIL_SECTION", "_sphinx_cpp_v4_id",
     "_enum_synopsis_html", "_enum_synopsis_lines", "_function_signature",
