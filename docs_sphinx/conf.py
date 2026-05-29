@@ -499,7 +499,9 @@ def _doxygen_desc_to_md(el, h_level: int = 3) -> str:
             if t == "ulink":
                 url = child.get("url", "")
                 parts.append(f"[{inner}]({url})" if url else inner)
-            elif t in ("ref", "computeroutput"):
+            elif t == "ref":
+                parts.append(_ref_link(child.get("refid", ""), inner))
+            elif t == "computeroutput":
                 parts.append(f"`{inner}`" if inner else "")
             elif t == "emphasis":
                 parts.append(f"*{inner}*" if inner else "")
@@ -515,7 +517,18 @@ def _doxygen_desc_to_md(el, h_level: int = 3) -> str:
                 parts.append(child.tail)
         return "".join(parts)
 
-    _BLOCK_TAGS = {"orderedlist", "itemizedlist", "programlisting"}
+    _BLOCK_TAGS = {"orderedlist", "itemizedlist", "programlisting", "simplesect"}
+
+    def _ref_link(refid: str, text: str) -> str:
+        if not (refid and text):
+            return f"`{text}`" if text else ""
+        import re as _re
+        m = _re.search(r'_1([a-z]{1,3}[0-9a-f]{20,})$', refid)
+        if m:
+            url = f"{DOXYGEN_BASE_URL}{refid[:m.start()]}.html#{m.group(1)}"
+        else:
+            url = f"{DOXYGEN_BASE_URL}{refid}.html"
+        return f"[`{text}`]({url})"
 
     def _listitem_text(item) -> str:
         parts = []
@@ -534,6 +547,15 @@ def _doxygen_desc_to_md(el, h_level: int = 3) -> str:
         elif t == "itemizedlist":
             for item in sub.findall("listitem"):
                 result.append(f"- {_listitem_text(item)}")
+        elif t == "simplesect":
+            kind = sub.get("kind", "")
+            admon = {"note": "note", "warning": "warning",
+                     "attention": "warning", "remark": "note"}.get(kind)
+            body = "\n\n".join(_blocks(sub, level))
+            if admon:
+                result.append(f":::{{{admon}}}\n{body}\n:::")
+            elif body:
+                result.append(body)
 
     def _blocks(node, level: int) -> list[str]:
         result = []
@@ -561,7 +583,9 @@ def _doxygen_desc_to_md(el, h_level: int = 3) -> str:
                         if st == "ulink":
                             url = sub.get("url", "")
                             pending.append(f"[{inner}]({url})" if url else inner)
-                        elif st in ("ref", "computeroutput"):
+                        elif st == "ref":
+                            pending.append(_ref_link(sub.get("refid", ""), inner))
+                        elif st == "computeroutput":
                             pending.append(f"`{inner}`" if inner else "")
                         elif st == "emphasis":
                             pending.append(f"*{inner}*" if inner else "")
@@ -579,22 +603,14 @@ def _doxygen_desc_to_md(el, h_level: int = 3) -> str:
                 if text:
                     result.append(text)
             elif t in ("sect1", "sect2", "sect3"):
-                offset = {"sect1": 0, "sect2": 1, "sect3": 2}[t]
-                lv = level + offset
                 title_text = child.findtext("title") or ""
-                result.append(f"{'#' * lv} {title_text}")
-                result.extend(_blocks(child, lv + 1))
+                if title_text:
+                    result.append(f"{'#' * level} {title_text}")
+                    result.extend(_blocks(child, level + 1))
+                else:
+                    result.extend(_blocks(child, level))
             elif t in _BLOCK_TAGS:
                 _emit_block(child, result, level)
-            elif t == "simplesect":
-                kind = child.get("kind", "")
-                admon = {"note": "note", "warning": "warning",
-                         "attention": "warning", "remark": "note"}.get(kind)
-                body = "\n\n".join(_blocks(child, level))
-                if admon:
-                    result.append(f":::{{{admon}}}\n{body}\n:::")
-                elif body:
-                    result.append(body)
         return result
 
     return "\n\n".join(b for b in _blocks(el, h_level) if b.strip())
@@ -803,31 +819,18 @@ def _write_api_stub(node: dict, out_dir: pathlib.Path,
     title = node["title"]
     out = out_dir / f"{name}.md"
 
+    lines = [f"# {title} {{#api_{name}}}", ""]
     if node["children"]:
-        # Navigation index page — list children as @subpage entries; the
-        # existing _subpage_list_to_toctree rule converts them to a real
-        # toctree at translate time.
-        lines = [f"# {title} {{#api_{name}}}", ""]
         lines += ["## Topics", ""]
         for child in node["children"]:
             lines.append(f"- @subpage api_{child['name']}")
         lines.append("")
-        if node["detailed"]:
-            lines += ["## Detailed Description", "", node["detailed"], ""]
-        if ns_map and ns_map.get(name):
-            lines += ["## Namespaces", ""]
-            for _ns_name, anchor in ns_map[name]:
-                lines.append(f"- @subpage {anchor}")
-            lines.append("")
-        _stub_write(out, "\n".join(lines) + "\n")
-        for child in node["children"]:
-            _write_api_stub(child, out_dir, classes_seen, ns_map)
-        return
 
-    # ---- Leaf page ----------------------------------------------------------
-    lines = [f"# {title} {{#api_{name}}}", ""]
+    _has_content = bool(node["innerclasses"] or node["sections"] or node["children"])
     if node["detailed"]:
         lines += ["## Detailed Description", "", node["detailed"], ""]
+    elif _has_content:
+        lines += ["## Detailed Description", ""]
 
     if ns_map and ns_map.get(name):
         lines += ["## Namespaces", ""]
@@ -1012,8 +1015,9 @@ def _write_api_stub(node: dict, out_dir: pathlib.Path,
             lines.append(_class_page_name(c["refid"]))
         lines += ["```", ""]
 
-    # out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     _stub_write(out, "\n".join(lines) + "\n")
+    for child in node["children"]:
+        _write_api_stub(child, out_dir, classes_seen, ns_map)
 
 
 # Class-XML sectiondef kind → (summary heading, detail heading).
