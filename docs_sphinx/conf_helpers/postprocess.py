@@ -8,7 +8,8 @@
 from __future__ import annotations
 import pathlib, re
 
-from .state import _doxy_page_to_local, _DOXY_ANCHOR_TO_MEMBER
+from .state import (_doxy_page_to_local, _DOXY_ANCHOR_TO_MEMBER, DOXYGEN_BASE_URL,
+                    _API_XML_DIR, DOC_ROOT)
 
 
 def _doxy_parent_page(page: str, api_dir: pathlib.Path) -> str:
@@ -126,6 +127,35 @@ def _strip_breathe_class_clutter(api_dir: pathlib.Path) -> None:
             h.write_text(new, encoding="utf-8")
 
 
+def _copy_js_tryit_files(out_dir: pathlib.Path) -> None:
+    """Copy js_*.html Try-it pages + assets so iframe src="../../js_*.html" resolves."""
+    import shutil, os
+    js_assets = DOC_ROOT / "js_tutorials" / "js_assets"
+    dest = out_dir / "js_tutorials"
+    if not js_assets.is_dir() or not dest.is_dir():
+        return
+    for src in js_assets.iterdir():
+        if src.is_file():
+            dst = dest / src.name
+            if not dst.exists():
+                shutil.copy2(src, dst)
+    # opencv.js from CMake (OPENCV_JS_PATH); bundle it alongside the Try-it pages.
+    opencv_js = os.environ.get("OPENCV_JS_PATH", "")
+    if opencv_js and pathlib.Path(opencv_js).is_file():
+        dst = dest / "opencv.js"
+        if not dst.exists():
+            shutil.copy2(opencv_js, dst)
+    # Extra assets referenced by Try-it pages but not in js_assets/.
+    _opencv_root = DOC_ROOT.parent
+    for _name, _src in {
+        "box.mp4":           _opencv_root / "samples/cpp/tutorial_code/calib3d/real_time_pose_estimation/Data/box.mp4",
+        "space_shuttle.jpg": DOC_ROOT / "tutorials/dnn/images/space_shuttle.jpg",
+        "roi.jpg":           DOC_ROOT / "py_tutorials/py_core/py_basic_ops/images/roi.jpg",
+    }.items():
+        if _src.is_file() and not (dest / _name).exists():
+            shutil.copy2(_src, dest / _name)
+
+
 def _generate_search_map(out_dir: pathlib.Path) -> None:
     """Write _static/search_map.js: stem→Sphinx-path for every built HTML page."""
     import json
@@ -151,4 +181,5 @@ def _inline_coll_graphs_on_finish(app, exception):
     for _api in ("main_modules", "extra_modules"):
         _inline_collaboration_svgs(out / _api, out / "_images")
         _strip_breathe_class_clutter(out / _api)
+    _copy_js_tryit_files(out)
     _generate_search_map(out)
