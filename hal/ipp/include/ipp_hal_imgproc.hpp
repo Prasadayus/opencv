@@ -138,10 +138,28 @@ int ipp_hal_cvtRGBAtoMultipliedRGBA(const uchar * src_data, size_t src_step, uch
 #undef cv_hal_cvtRGBAtoMultipliedRGBA
 #define cv_hal_cvtRGBAtoMultipliedRGBA ipp_hal_cvtRGBAtoMultipliedRGBA
 
-int ipp_hal_cvtColorYUV2Gray(const uchar * src_data, size_t src_step, uchar * dst_data, size_t dst_step, int width, int height);
-#undef cv_hal_cvtColorYUV2Gray
-#define cv_hal_cvtColorYUV2Gray ipp_hal_cvtColorYUV2Gray
+int ipp_hal_matchTemplate(const uchar* src_data, size_t src_step, int src_width, int src_height,
+                          const uchar* templ_data, size_t templ_step, int templ_width, int templ_height,
+                          float* result_data, size_t result_step, int depth, int cn, int method);
+#undef cv_hal_matchTemplate
+#define cv_hal_matchTemplate ipp_hal_matchTemplate
 
 #endif // IPP_VERSION_X100 >= 700
+
+#define IPP_DISABLE_PERF_CANNY_MT 1 // cv::Canny OpenCV MT performance is better
+
+#if defined(HAVE_IPP_IW)
+int ipp_hal_canny(const uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step,
+                  int width, int height, int cn,
+                  double lowThreshold, double highThreshold, int ksize, bool L2gradient);
+#undef cv_hal_canny
+#define cv_hal_canny ipp_hal_canny
+
+int ipp_hal_canny_deriv(const short* dx_data, size_t dx_step, const short* dy_data, size_t dy_step,
+                        uchar* dst_data, size_t dst_step, int width, int height, int cn,
+                        double lowThreshold, double highThreshold, bool L2gradient);
+#undef cv_hal_canny_deriv
+#define cv_hal_canny_deriv ipp_hal_canny_deriv
+#endif
 
 #endif //__IPP_HAL_IMGPROC_HPP__
