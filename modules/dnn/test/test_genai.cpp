@@ -212,6 +212,132 @@ TEST(DNN_GenAI, PreprocessFixedSizeRejectsBadInput)
     EXPECT_THROW(genai::preprocessFixedSize(image, zeroSize), cv::Exception);
 }
 
+// factor = patchSize*mergeSize = 2; a 4x6 image is already factor-aligned and within
+// [minPixels, maxPixels], so smartResize is a no-op and the grid is exactly predictable.
+TEST(DNN_GenAI, PreprocessPatchifyComputesGridAndNormalizes)
+{
+    VLMConfig config = VLMConfig::defaultConfig(VLM_MODEL_PADDLEOCR_VL);
+    config.patchSize = 2;
+    config.mergeSize = 1;
+    config.minPixels = 1;
+    config.maxPixels = 100000;
+
+    const Mat white(4, 6, CV_8UC3, Scalar::all(255));
+    int gridH = 0, gridW = 0;
+    const Mat blob = genai::preprocessPatchify(white, config, gridH, gridW);
+
+    EXPECT_EQ(gridH, 2);
+    EXPECT_EQ(gridW, 3);
+    ASSERT_EQ(blob.dims, 5);
+    EXPECT_EQ(blob.size[0], 1);
+    EXPECT_EQ(blob.size[1], gridH * gridW);
+    EXPECT_EQ(blob.size[2], 3);
+    EXPECT_EQ(blob.size[3], 2);
+    EXPECT_EQ(blob.size[4], 2);
+    ASSERT_EQ(blob.type(), CV_32F);
+    for (size_t i = 0; i < blob.total(); i++)
+        ASSERT_NEAR(blob.ptr<float>()[i], 1.f, 1e-4f) << "at " << i;
+}
+
+TEST(DNN_GenAI, PreprocessPatchifyRejectsBadInput)
+{
+    int gridH = 0, gridW = 0;
+    const VLMConfig config = VLMConfig::defaultConfig(VLM_MODEL_PADDLEOCR_VL);
+    EXPECT_THROW(genai::preprocessPatchify(Mat(), config, gridH, gridW), cv::Exception);
+    EXPECT_THROW(genai::preprocessPatchify(Mat(8, 8, CV_8UC1, Scalar(0)), config, gridH, gridW),
+                 cv::Exception);
+
+    const Mat image(8, 8, CV_8UC3, Scalar::all(128));
+    VLMConfig zeroPatch = config;
+    zeroPatch.patchSize = 0;
+    EXPECT_THROW(genai::preprocessPatchify(image, zeroPatch, gridH, gridW), cv::Exception);
+
+    VLMConfig badPixels = config;
+    badPixels.minPixels = 100;
+    badPixels.maxPixels = 10;
+    EXPECT_THROW(genai::preprocessPatchify(image, badPixels, gridH, gridW), cv::Exception);
+}
+
+// longestEdge=4, maxTileEdge=2 on a 4x4 image: no rescale, a clean 2x2 tile grid plus one
+// global thumbnail (+1), so shape and normalized value are exactly predictable.
+TEST(DNN_GenAI, PreprocessTileGridComputesGridAndNormalizes)
+{
+    VLMConfig config = VLMConfig::defaultConfig(VLM_MODEL_GRANITE_DOCLING);
+    config.longestEdge = 4;
+    config.maxTileEdge = 2;
+
+    const Mat white(4, 4, CV_8UC3, Scalar::all(255));
+    int rows = 0, cols = 0;
+    const Mat blob = genai::preprocessTileGrid(white, config, rows, cols);
+
+    EXPECT_EQ(rows, 2);
+    EXPECT_EQ(cols, 2);
+    ASSERT_EQ(blob.dims, 5);
+    EXPECT_EQ(blob.size[0], 1);
+    EXPECT_EQ(blob.size[1], rows * cols + 1);
+    EXPECT_EQ(blob.size[2], 3);
+    EXPECT_EQ(blob.size[3], 2);
+    EXPECT_EQ(blob.size[4], 2);
+    ASSERT_EQ(blob.type(), CV_32F);
+    for (size_t i = 0; i < blob.total(); i++)
+        ASSERT_NEAR(blob.ptr<float>()[i], 1.f, 1e-4f) << "at " << i;
+}
+
+TEST(DNN_GenAI, PreprocessTileGridRejectsBadInput)
+{
+    int rows = 0, cols = 0;
+    const VLMConfig config = VLMConfig::defaultConfig(VLM_MODEL_GRANITE_DOCLING);
+    EXPECT_THROW(genai::preprocessTileGrid(Mat(), config, rows, cols), cv::Exception);
+    EXPECT_THROW(genai::preprocessTileGrid(Mat(8, 8, CV_8UC1, Scalar(0)), config, rows, cols),
+                 cv::Exception);
+
+    const Mat image(8, 8, CV_8UC3, Scalar::all(128));
+    VLMConfig zeroEdge = config;
+    zeroEdge.longestEdge = 0;
+    EXPECT_THROW(genai::preprocessTileGrid(image, zeroEdge, rows, cols), cv::Exception);
+}
+
+TEST(DNN_GenAI, BuildPatchifyPromptRepeatsPlaceholderByMergedPatchCount)
+{
+    VLMConfig config;
+    config.promptPrefix = "P[";
+    config.imagePlaceholder = "I";
+    config.promptInfix = "]";
+    config.promptSuffix = "S";
+    config.mergeSize = 2;
+
+    // gridH=4, gridW=2 -> (4*2)/(2*2) = 2 merged-patch tokens.
+    EXPECT_EQ(genai::buildPatchifyPrompt(config, 4, 2, "hi"), "P[II]hiS");
+}
+
+TEST(DNN_GenAI, BuildPatchifyPromptRejectsZeroImageTokens)
+{
+    VLMConfig config;
+    config.mergeSize = 100;
+    EXPECT_THROW(genai::buildPatchifyPrompt(config, 1, 1, "hi"), cv::Exception);
+}
+
+TEST(DNN_GenAI, BuildTileGridPromptHasRowColAndGlobalImgMarkup)
+{
+    VLMConfig config;
+    config.promptPrefix = "P";
+    config.imagePlaceholder = "I";
+    config.promptSuffix = "S";
+    config.imageSeqLen = 1;
+
+    const String expected =
+        "P<fake_token_around_image><row_1_col_1>I<fake_token_around_image><row_1_col_2>I\n"
+        "\n<fake_token_around_image><global-img>I<fake_token_around_image>hiS";
+    EXPECT_EQ(genai::buildTileGridPrompt(config, 1, 2, "hi"), expected);
+}
+
+TEST(DNN_GenAI, BuildTileGridPromptRejectsZeroImageSeqLen)
+{
+    VLMConfig config;
+    config.imageSeqLen = 0;
+    EXPECT_THROW(genai::buildTileGridPrompt(config, 1, 1, "hi"), cv::Exception);
+}
+
 TEST(DNN_GenAI, GenerateFromEmbeddingsRejectsBadArguments)
 {
     Net embedNet, decoderNet;

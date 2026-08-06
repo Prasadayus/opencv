@@ -39,6 +39,35 @@ CV_EXPORTS Mat tokenIdsToMat(const int* ids, int count, int idType);
 /** @brief Resize to `config.imageSize` and normalize, producing an NCHW `pixel_values` blob. */
 CV_EXPORTS Mat preprocessFixedSize(const Mat& imageBgr, const VLMConfig& config);
 
+/** @brief Aspect-preserving resize to a patch-grid-aligned size, then split into
+ * `config.patchSize`-square patches, producing a `[1, gridH*gridW, 3, patchSize, patchSize]`
+ * `pixel_values` blob.
+ * @param[out] gridH, gridW  patch grid dimensions, needed for `image_grid_thw` and the prompt.
+ */
+CV_EXPORTS Mat preprocessPatchify(const Mat& imageBgr, const VLMConfig& config,
+                                  int& gridH, int& gridW);
+
+/** @brief Tile an image to `config.longestEdge` on its long side, split into
+ * `config.maxTileEdge`-square tiles plus one global thumbnail, producing a
+ * `[1, rows*cols+1, 3, maxTileEdge, maxTileEdge]` `pixel_values` blob.
+ * @param[out] rows, cols  tile grid dimensions, needed for the prompt.
+ */
+CV_EXPORTS Mat preprocessTileGrid(const Mat& imageBgr, const VLMConfig& config,
+                                  int& rows, int& cols);
+
+/** @brief PaddleOCR-VL-style prompt: `config.promptPrefix` + `config.imagePlaceholder` repeated
+ * once per merged patch + `config.promptInfix` + @p userPrompt + `config.promptSuffix`.
+ */
+CV_EXPORTS String buildPatchifyPrompt(const VLMConfig& config, int gridH, int gridW,
+                                      const String& userPrompt);
+
+/** @brief GraniteDocling-style prompt: a `<row_R_col_C>`-tagged block per tile plus a
+ * global-thumbnail block, each holding `config.imageSeqLen` copies of `config.imagePlaceholder`,
+ * wrapped in `config.promptPrefix`/`config.promptSuffix`.
+ */
+CV_EXPORTS String buildTileGridPrompt(const VLMConfig& config, int rows, int cols,
+                                      const String& userPrompt);
+
 /** @brief Greedy decode over a graph that takes token ids, returning the ids it generated.
  *
  * A trailing stop token terminates generation and is not returned. With `config.useKVCache` each

@@ -76,23 +76,53 @@ String VLM::generate(InputArray image, const String& prompt, int maxNewTokens)
 {
     VLM_Impl& vlmImpl = vlmImplRef(impl);
     const VLMConfig& config = vlmImpl.config;
+    const Mat imageBgr = image.getMat();
 
-    Mat pixelValues;
+    Mat imageFeatures;
+    String fullPrompt;
     switch (config.preprocess)
     {
     case VLM_PREPROCESS_FIXED_SIZE:
-        pixelValues = genai::preprocessFixedSize(image.getMat(), config);
+    {
+        vlmImpl.visionNet.setInput(genai::preprocessFixedSize(imageBgr, config), "pixel_values");
+        imageFeatures = vlmImpl.visionNet.forward();
+        fullPrompt = config.promptPrefix + prompt + config.promptSuffix;
         break;
+    }
+    case VLM_PREPROCESS_PATCHIFY:
+    {
+        int gridH, gridW;
+        Mat pixelValues = genai::preprocessPatchify(imageBgr, config, gridH, gridW);
+        const int gridShape[] = {1, 3};
+        Mat imageGridThw(2, gridShape, CV_64S);
+        imageGridThw.at<int64_t>(0, 0) = 1;
+        imageGridThw.at<int64_t>(0, 1) = gridH;
+        imageGridThw.at<int64_t>(0, 2) = gridW;
+
+        vlmImpl.visionNet.setInput(pixelValues, "pixel_values");
+        vlmImpl.visionNet.setInput(imageGridThw, "image_grid_thw");
+        imageFeatures = vlmImpl.visionNet.forward();
+        fullPrompt = genai::buildPatchifyPrompt(config, gridH, gridW, prompt);
+        break;
+    }
+    case VLM_PREPROCESS_TILE_GRID:
+    {
+        int rows, cols;
+        Mat pixelValues = genai::preprocessTileGrid(imageBgr, config, rows, cols);
+        const int maskShape[] = {1, pixelValues.size[1], pixelValues.size[3], pixelValues.size[4]};
+        Mat pixelAttentionMask(4, maskShape, CV_Bool, Scalar(1));
+
+        vlmImpl.visionNet.setInput(pixelValues, "pixel_values");
+        vlmImpl.visionNet.setInput(pixelAttentionMask, "pixel_attention_mask");
+        imageFeatures = vlmImpl.visionNet.forward();
+        fullPrompt = genai::buildTileGridPrompt(config, rows, cols, prompt);
+        break;
+    }
     default:
-        CV_Error(Error::StsNotImplemented,
-                 "DNN/VLM: only VLM_PREPROCESS_FIXED_SIZE is implemented");
+        CV_Error(Error::StsBadArg, "DNN/VLM: VLMConfig::preprocess is not a VLMPreprocess value");
     }
 
-    vlmImpl.visionNet.setInput(pixelValues, "pixel_values");
-    const Mat imageFeatures = vlmImpl.visionNet.forward();
-
-    const std::vector<int> ids =
-        vlmImpl.tokenizer.encode(config.promptPrefix + prompt + config.promptSuffix);
+    const std::vector<int> ids = vlmImpl.tokenizer.encode(fullPrompt);
     vlmImpl.embedNet.setInput(
         genai::tokenIdsToMat(ids.data(), (int)ids.size(), config.idType), "input_ids");
     const Mat textEmbeds = vlmImpl.embedNet.forward();
@@ -104,6 +134,8 @@ String VLM::generate(InputArray image, const String& prompt, int maxNewTokens)
     }
     else
     {
+        CV_CheckGE(config.imageTokenId, 0,
+                   "DNN/VLM: VLMConfig::imageTokenId must be set for VLM_MERGE_SCATTER");
         textEmbeds.copyTo(inputsEmbeds);
         genai::scatterImageFeatures(inputsEmbeds, ids, config.imageTokenId, imageFeatures);
     }
