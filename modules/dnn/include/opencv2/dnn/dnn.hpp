@@ -2128,8 +2128,8 @@ struct CV_EXPORTS_W_SIMPLE LLMConfig
     CV_WRAP static LLMConfig defaultConfig(int modelType);
 
     //! Overwrites only the fields present in @p fn, so a file may override a preset in part.
-    void read(const FileNode& fn);
-    void write(FileStorage& fs) const;
+    CV_WRAP void read(const FileNode& fn);
+    CV_WRAP void write(FileStorage& fs) const;
 
     CV_PROP_RW String inputIdsName;      //!< token-id input; "idx" for the nanoGPT GPT-2 export
     CV_PROP_RW String attentionMaskName; //!< empty when the graph has no such input
@@ -2254,8 +2254,8 @@ struct CV_EXPORTS_W_SIMPLE VLMConfig
     CV_WRAP static VLMConfig defaultConfig(int modelType);
 
     //! Overwrites only the fields present in @p fn, so a file may override a preset in part.
-    void read(const FileNode& fn);
-    void write(FileStorage& fs) const;
+    CV_WRAP void read(const FileNode& fn);
+    CV_WRAP void write(FileStorage& fs) const;
 
     CV_PROP_RW int preprocess;          //!< VLMPreprocess
     CV_PROP_RW int merge;               //!< VLMEmbedMerge
@@ -2283,6 +2283,7 @@ struct CV_EXPORTS_W_SIMPLE VLMConfig
     //! decoders are with-past merged graphs.
     CV_PROP_RW bool useKVCache;
     CV_PROP_RW int idType;              //!< CV_64S or CV_32S, matching the graph's id inputs
+    CV_PROP_RW String attentionMaskName; //!< decoder input name; empty when the graph has none
 
     CV_PROP_RW String visionNet;        //!< paths relative to VLM::create's modelDir
     CV_PROP_RW String embedNet;

@@ -165,10 +165,9 @@ std::vector<int> generateFromTokenIds(Net& net, const std::vector<int>& promptId
     return generated;
 }
 
-// Fixed by the exported graph layout rather than configurable: every VLM export in scope names its
-// decoder inputs this way, and a model that does not is a new preprocess mode, not a new field.
+// inputs_embeds/input_ids names are fixed by every VLM export in scope; attention_mask is not
+// (PaliGemma2's decoder has no such input), so that name comes from VLMConfig instead.
 static const char* const kInputsEmbeds = "inputs_embeds";
-static const char* const kAttentionMask = "attention_mask";
 static const char* const kInputIds = "input_ids";
 
 std::vector<int> generateFromEmbeddings(Net& embedNet, Net& decoderNet, const Mat& promptEmbeds,
@@ -196,9 +195,13 @@ std::vector<int> generateFromEmbeddings(Net& embedNet, Net& decoderNet, const Ma
 
     for (int step = 0; step < maxNewTokens; step++)
     {
-        mask.assign((size_t)contextLen, 1);
         decoderNet.setInput(feed, kInputsEmbeds);
-        decoderNet.setInput(tokenIdsToMat(mask.data(), contextLen, config.idType), kAttentionMask);
+        if (!config.attentionMaskName.empty())
+        {
+            mask.assign((size_t)contextLen, 1);
+            decoderNet.setInput(tokenIdsToMat(mask.data(), contextLen, config.idType),
+                               config.attentionMaskName);
+        }
 
         const int newId = argmaxLastToken(decoderNet.forward());
         if (std::find(config.stopTokenIds.begin(), config.stopTokenIds.end(), newId)

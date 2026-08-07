@@ -515,10 +515,13 @@ TEST(DNN_VLMConfig, Defaults)
     EXPECT_EQ(config.imageTokenId, -1);
     EXPECT_FALSE(config.useKVCache);
     EXPECT_EQ(config.idType, CV_64S);
+    EXPECT_EQ(config.attentionMaskName, "attention_mask");
     EXPECT_EQ(config.engine, (int)ENGINE_AUTO);
 }
 
 // PaliGemma2 merges by concatenation, so it needs no image placeholder and no image token id.
+// Its decoder export also takes no attention_mask input, confirmed against a real model
+// (setMainGraphInput otherwise fails with "input 'attention_mask' is not found").
 TEST(DNN_VLMConfig, PresetPaliGemma2)
 {
     const VLMConfig config = VLMConfig::defaultConfig(VLM_MODEL_PALIGEMMA2);
@@ -530,6 +533,7 @@ TEST(DNN_VLMConfig, PresetPaliGemma2)
     EXPECT_TRUE(config.imagePlaceholder.empty());
     EXPECT_TRUE(config.promptPrefix.empty());
     EXPECT_FALSE(config.useKVCache);
+    EXPECT_TRUE(config.attentionMaskName.empty());
     EXPECT_EQ(config.visionNet, "vision_model.onnx");
     EXPECT_EQ(config.embedNet, "embedding.onnx");
     EXPECT_EQ(config.decoderNet, "gemma2_3b.onnx");
@@ -606,6 +610,7 @@ TEST(DNN_VLMConfig, WriteReadRoundTrip)
     EXPECT_EQ(read.promptSuffix, written.promptSuffix);
     EXPECT_EQ(read.useKVCache, written.useKVCache);
     EXPECT_EQ(read.idType, written.idType);
+    EXPECT_EQ(read.attentionMaskName, written.attentionMaskName);
     EXPECT_EQ(read.visionNet, written.visionNet);
     EXPECT_EQ(read.embedNet, written.embedNet);
     EXPECT_EQ(read.decoderNet, written.decoderNet);

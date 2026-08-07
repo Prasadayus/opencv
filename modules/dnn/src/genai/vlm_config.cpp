@@ -29,6 +29,7 @@ VLMConfig::VLMConfig()
     , imageTokenId(-1)
     , useKVCache(false)
     , idType(CV_64S)
+    , attentionMaskName("attention_mask")
     , engine(ENGINE_AUTO)
     , backend(DNN_BACKEND_DEFAULT)
     , target(DNN_TARGET_CPU)
@@ -45,6 +46,7 @@ VLMConfig VLMConfig::defaultConfig(int modelType)
         config.merge = VLM_MERGE_CONCAT;
         config.imageSize = Size(224, 224);
         config.stopTokenIds = {1};
+        config.attentionMaskName = String();  // this decoder export takes no attention_mask
         config.visionNet = "vision_model.onnx";
         config.embedNet = "embedding.onnx";
         config.decoderNet = "gemma2_3b.onnx";
@@ -103,6 +105,7 @@ void VLMConfig::read(const FileNode& fn)
     genai::readIfPresent(fn, "prompt_infix", promptInfix);
     genai::readIfPresent(fn, "prompt_suffix", promptSuffix);
     genai::readIfPresent(fn, "id_type", idType);
+    genai::readIfPresent(fn, "attention_mask_name", attentionMaskName);
     genai::readIfPresent(fn, "vision_net", visionNet);
     genai::readIfPresent(fn, "embed_net", embedNet);
     genai::readIfPresent(fn, "decoder_net", decoderNet);
@@ -144,6 +147,7 @@ void VLMConfig::write(FileStorage& fs) const
        << "prompt_suffix" << promptSuffix
        << "use_kv_cache" << (int)useKVCache
        << "id_type" << idType
+       << "attention_mask_name" << attentionMaskName
        << "vision_net" << visionNet
        << "embed_net" << embedNet
        << "decoder_net" << decoderNet
