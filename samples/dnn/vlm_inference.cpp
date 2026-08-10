@@ -6,11 +6,12 @@
 
 /*
 Run image-conditioned text generation with cv::dnn::VLM, covering the PaliGemma2, PaddleOCR-VL
-and GraniteDocling presets. See the model-specific export instructions in vlm_inference.py.
+and GraniteDocling presets.
 
 To run:
-    ./example_dnn_vlm_inference --model_type=paligemma2 --model_dir=/path/to/paligemma2 \
-        --tokenizer=/path/to/paligemma2/config.json --input=cat.jpg --prompt="cap en\n"
+    ./example_dnn_vlm_inference --model_type=<paligemma2|paddleocr-vl|granite-docling> \
+        --model_dir=/path/to/the/model/dir --tokenizer=/path/to/the/model's/config.json \
+        --input=/path/to/image --prompt="<task-prompt>"
 
 If the three ONNX graphs are not siblings under one directory, override their paths
 individually with --vision_net/--embedding_net/--decoder_net (each may be absolute, or relative to

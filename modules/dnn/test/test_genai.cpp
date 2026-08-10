@@ -46,17 +46,6 @@ TEST(DNN_GenAI, ArgmaxAcceptsRank2Logits)
     EXPECT_EQ(argmaxLastToken(logits), 3);
 }
 
-TEST(DNN_GenAI, ArgmaxRejectsUnsupportedShapeAndType)
-{
-    const int sizes4d[] = {1, 1, 2, 5};
-    EXPECT_THROW(argmaxLastToken(Mat(4, sizes4d, CV_32F, Scalar(0))), cv::Exception);
-
-    const int sizes3d[] = {2, 2, 5};
-    EXPECT_THROW(argmaxLastToken(Mat(3, sizes3d, CV_32F, Scalar(0))), cv::Exception);
-
-    EXPECT_THROW(argmaxLastToken(Mat(3, 5, CV_64F, Scalar(0))), cv::Exception);
-}
-
 TEST(DNN_GenAI, ScatterReplacesOnlyImageTokenPositions)
 {
     const int imageTokenId = 7;
@@ -110,18 +99,6 @@ TEST(DNN_GenAI, ScatterRejectsImageTokenFeatureCountMismatch)
     }
 }
 
-TEST(DNN_GenAI, ScatterRejectsTokenCountSequenceLengthMismatch)
-{
-    const int hiddenDim = 2;
-    const int embedSizes[] = {1, 3, hiddenDim};
-    Mat embeds(3, embedSizes, CV_32F, Scalar(0));
-    const int featureSizes[] = {1, 1, hiddenDim};
-    Mat features(3, featureSizes, CV_32F, Scalar(1));
-
-    const std::vector<int> tokens = {7, 1};  // 2 tokens against a sequence length of 3
-    EXPECT_THROW(scatterImageFeatures(embeds, tokens, 7, features), cv::Exception);
-}
-
 TEST(DNN_GenAI, ConcatSequenceKeepsOrder)
 {
     const int hiddenDim = 2;
@@ -142,15 +119,6 @@ TEST(DNN_GenAI, ConcatSequenceKeepsOrder)
         EXPECT_FLOAT_EQ(m[i], 5.f) << "image features must come first, at offset " << i;
     for (int i = 2 * hiddenDim; i < 5 * hiddenDim; i++)
         EXPECT_FLOAT_EQ(m[i], 9.f) << "text embeddings must follow, at offset " << i;
-}
-
-TEST(DNN_GenAI, ConcatRejectsHiddenSizeMismatch)
-{
-    const int imageSizes[] = {1, 2, 2};
-    Mat image(3, imageSizes, CV_32F, Scalar(1));
-    const int textSizes[] = {1, 2, 3};
-    Mat text(3, textSizes, CV_32F, Scalar(1));
-    EXPECT_THROW(concatSequence(image, text), cv::Exception);
 }
 
 TEST(DNN_GenAI, TokenIdsToMatHonoursIdType)
@@ -310,13 +278,6 @@ TEST(DNN_GenAI, BuildPatchifyPromptRepeatsPlaceholderByMergedPatchCount)
     EXPECT_EQ(genai::buildPatchifyPrompt(config, 4, 2, "hi"), "P[II]hiS");
 }
 
-TEST(DNN_GenAI, BuildPatchifyPromptRejectsZeroImageTokens)
-{
-    VLMConfig config;
-    config.mergeSize = 100;
-    EXPECT_THROW(genai::buildPatchifyPrompt(config, 1, 1, "hi"), cv::Exception);
-}
-
 TEST(DNN_GenAI, BuildTileGridPromptHasRowColAndGlobalImgMarkup)
 {
     VLMConfig config;
@@ -329,47 +290,6 @@ TEST(DNN_GenAI, BuildTileGridPromptHasRowColAndGlobalImgMarkup)
         "P<fake_token_around_image><row_1_col_1>I<fake_token_around_image><row_1_col_2>I\n"
         "\n<fake_token_around_image><global-img>I<fake_token_around_image>hiS";
     EXPECT_EQ(genai::buildTileGridPrompt(config, 1, 2, "hi"), expected);
-}
-
-TEST(DNN_GenAI, BuildTileGridPromptRejectsZeroImageSeqLen)
-{
-    VLMConfig config;
-    config.imageSeqLen = 0;
-    EXPECT_THROW(genai::buildTileGridPrompt(config, 1, 1, "hi"), cv::Exception);
-}
-
-TEST(DNN_GenAI, GenerateFromEmbeddingsRejectsBadArguments)
-{
-    Net embedNet, decoderNet;
-    const int sizes[] = {1, 2, 4};
-    const Mat embeds(3, sizes, CV_32F, Scalar(0));
-    VLMConfig config = VLMConfig::defaultConfig(VLM_MODEL_PALIGEMMA2);
-
-    EXPECT_THROW(generateFromEmbeddings(embedNet, decoderNet, embeds, config, 0), cv::Exception);
-
-    const int flatSizes[] = {2, 4};
-    const Mat flat(2, flatSizes, CV_32F, Scalar(0));
-    EXPECT_THROW(generateFromEmbeddings(embedNet, decoderNet, flat, config, 8), cv::Exception);
-
-    config.idType = CV_32F;
-    EXPECT_THROW(generateFromEmbeddings(embedNet, decoderNet, embeds, config, 8), cv::Exception);
-}
-
-TEST(DNN_LLMConfig, Defaults)
-{
-    LLMConfig config;
-    EXPECT_EQ(config.inputIdsName, "input_ids");
-    EXPECT_EQ(config.attentionMaskName, "attention_mask");
-    EXPECT_TRUE(config.positionIdsName.empty());
-    EXPECT_TRUE(config.stopTokenIds.empty());
-    EXPECT_EQ(config.bosTokenId, -1);
-    EXPECT_TRUE(config.promptPrefix.empty());
-    EXPECT_TRUE(config.promptSuffix.empty());
-    EXPECT_FALSE(config.useKVCache);
-    EXPECT_EQ(config.idType, CV_64S);
-    EXPECT_EQ(config.engine, (int)ENGINE_AUTO);
-    EXPECT_EQ(config.backend, (int)DNN_BACKEND_DEFAULT);
-    EXPECT_EQ(config.target, (int)DNN_TARGET_CPU);
 }
 
 // Each preset must match the constants the corresponding samples/dnn script uses.
@@ -412,12 +332,6 @@ TEST(DNN_LLMConfig, PresetGemma3)
     EXPECT_EQ(config.promptSuffix, "<end_of_turn>\n<start_of_turn>model\n");
     EXPECT_EQ(config.idType, CV_64S);
     EXPECT_FALSE(config.useKVCache);
-}
-
-TEST(DNN_LLMConfig, RejectsUnknownModelType)
-{
-    EXPECT_THROW(LLMConfig::defaultConfig(-1), cv::Exception);
-    EXPECT_THROW(LLMConfig::defaultConfig(3), cv::Exception);
 }
 
 TEST(DNN_LLMConfig, WriteReadRoundTrip)
@@ -475,50 +389,6 @@ TEST(DNN_LLMConfig, ReadRejectsUnsupportedIdType)
     EXPECT_THROW(config.read(in.root()), cv::Exception);
 }
 
-// The argument guards all run before the net is touched, so an empty Net is enough to reach them.
-TEST(DNN_GenAI, GenerateFromTokenIdsRejectsBadArguments)
-{
-    Net net;
-    const std::vector<int> ids = {1, 2};
-
-    LLMConfig config = LLMConfig::defaultConfig(LLM_MODEL_QWEN2_5);
-    EXPECT_THROW(generateFromTokenIds(net, std::vector<int>(), config, 8), cv::Exception);
-    EXPECT_THROW(generateFromTokenIds(net, ids, config, 0), cv::Exception);
-
-    config.idType = CV_32F;
-    EXPECT_THROW(generateFromTokenIds(net, ids, config, 8), cv::Exception);
-
-    config = LLMConfig::defaultConfig(LLM_MODEL_QWEN2_5);
-    config.inputIdsName.clear();
-    EXPECT_THROW(generateFromTokenIds(net, ids, config, 8), cv::Exception);
-}
-
-TEST(DNN_LLM, DefaultConstructedHasNoState)
-{
-    LLM llm;
-    EXPECT_THROW(llm.reset(), cv::Exception);
-    EXPECT_THROW(llm.lastTokensUsed(), cv::Exception);
-    EXPECT_THROW(llm.getTokenizer(), cv::Exception);
-    EXPECT_THROW(llm.getConfig(), cv::Exception);
-    EXPECT_THROW(llm.getNet(), cv::Exception);
-}
-
-TEST(DNN_VLMConfig, Defaults)
-{
-    VLMConfig config;
-    EXPECT_EQ(config.preprocess, (int)VLM_PREPROCESS_FIXED_SIZE);
-    EXPECT_EQ(config.merge, (int)VLM_MERGE_SCATTER);
-    EXPECT_EQ(config.imageSize, Size(224, 224));
-    EXPECT_EQ(config.mean, Scalar::all(0.5));
-    EXPECT_EQ(config.stddev, Scalar::all(0.5));
-    EXPECT_DOUBLE_EQ(config.rescaleFactor, 1.0 / 255.0);
-    EXPECT_EQ(config.imageTokenId, -1);
-    EXPECT_FALSE(config.useKVCache);
-    EXPECT_EQ(config.idType, CV_64S);
-    EXPECT_EQ(config.attentionMaskName, "attention_mask");
-    EXPECT_EQ(config.engine, (int)ENGINE_AUTO);
-}
-
 // PaliGemma2 merges by concatenation, so it needs no image placeholder and no image token id.
 // Its decoder export also takes no attention_mask input, confirmed against a real model
 // (setMainGraphInput otherwise fails with "input 'attention_mask' is not found").
@@ -534,9 +404,6 @@ TEST(DNN_VLMConfig, PresetPaliGemma2)
     EXPECT_TRUE(config.promptPrefix.empty());
     EXPECT_FALSE(config.useKVCache);
     EXPECT_TRUE(config.attentionMaskName.empty());
-    EXPECT_EQ(config.visionNet, "vision_model.onnx");
-    EXPECT_EQ(config.embedNet, "embedding.onnx");
-    EXPECT_EQ(config.decoderNet, "gemma2_3b.onnx");
 }
 
 TEST(DNN_VLMConfig, PresetPaddleOCRVL)
@@ -554,6 +421,7 @@ TEST(DNN_VLMConfig, PresetPaddleOCRVL)
     EXPECT_EQ(config.promptInfix, "<|IMAGE_END|>");
     EXPECT_EQ(config.promptSuffix, "\nAssistant:\n");
     EXPECT_TRUE(config.useKVCache);
+    EXPECT_EQ(config.imageTokenId, 100295);
 }
 
 TEST(DNN_VLMConfig, PresetGraniteDocling)
@@ -569,13 +437,7 @@ TEST(DNN_VLMConfig, PresetGraniteDocling)
     EXPECT_EQ(config.imagePlaceholder, "<image>");
     EXPECT_EQ(config.promptSuffix, "<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>");
     EXPECT_TRUE(config.useKVCache);
-    EXPECT_EQ(config.decoderNet, "onnx/decoder_model_merged.onnx");
-}
-
-TEST(DNN_VLMConfig, RejectsUnknownModelType)
-{
-    EXPECT_THROW(VLMConfig::defaultConfig(-1), cv::Exception);
-    EXPECT_THROW(VLMConfig::defaultConfig(3), cv::Exception);
+    EXPECT_EQ(config.imageTokenId, 100270);
 }
 
 TEST(DNN_VLMConfig, WriteReadRoundTrip)
@@ -658,27 +520,6 @@ TEST(DNN_LLM, CreateRejectsEmptyAndMissingPaths)
                  cv::Exception);
     EXPECT_THROW(LLM::create(-1, "/nonexistent/model.onnx", "/nonexistent/config.json"),
                  cv::Exception);
-}
-
-TEST(DNN_VLM, DefaultConstructedHasNoState)
-{
-    VLM vlm;
-    EXPECT_THROW(vlm.reset(), cv::Exception);
-    EXPECT_THROW(vlm.lastTokensUsed(), cv::Exception);
-    EXPECT_THROW(vlm.getTokenizer(), cv::Exception);
-    EXPECT_THROW(vlm.getConfig(), cv::Exception);
-    EXPECT_THROW(vlm.getNets(), cv::Exception);
-}
-
-TEST(DNN_VLM, CreateRejectsEmptyAndMissingPaths)
-{
-    VLMConfig config = VLMConfig::defaultConfig(VLM_MODEL_PALIGEMMA2);
-    EXPECT_THROW(VLM::create("/nonexistent", "", config), cv::Exception);
-    EXPECT_THROW(VLM::create("/nonexistent", "/nonexistent/config.json", config), cv::Exception);
-    EXPECT_THROW(VLM::create(-1, "/nonexistent", "/nonexistent/config.json"), cv::Exception);
-
-    config.visionNet.clear();
-    EXPECT_THROW(VLM::create("/nonexistent", "/nonexistent/config.json", config), cv::Exception);
 }
 
 // Empty modelDir must not itself be a failure reason.

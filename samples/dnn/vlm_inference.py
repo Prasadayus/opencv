@@ -8,17 +8,14 @@
 This is a sample script to run image-conditioned text generation in OpenCV using cv.dnn.VLM,
 covering the PaliGemma2, PaddleOCR-VL and GraniteDocling presets.
 
-Model: https://huggingface.co/google/paligemma2-3b-pt-224
-ONNX:  https://huggingface.co/nklskyoy/paligemma2-3b-pt-224-onnx
-
 Run the script:
 
-    python vlm_inference.py --model_type=paligemma2 --model_dir=<dir-with-the-onnx-files> \
-        --tokenizer=<path-to-opencv-tokenizer-config.json> --input=<path-to-image> \
-        --prompt="cap en\n"
+    python vlm_inference.py --model_type=<paligemma2|paddleocr-vl|granite-docling> \
+        --model_dir=<dir-with-the-onnx-files> --tokenizer=<path-to-the-model's-config.json> \
+        --input=<path-to-image> --prompt=<task-prompt>
 
-    The tokenizer path should point to an OpenCV-format config.json, NOT the
-    HuggingFace tokenizer_config.json.
+    The tokenizer path may point to the model's own config.json or an OpenCV-format one; both
+    resolve to the right tokenizer automatically.
 
     If the three ONNX graphs are not siblings under one directory, override their paths
     individually with --vision_net/--embedding_net/--decoder_net (each may be absolute, or relative

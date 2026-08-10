@@ -46,8 +46,8 @@ Exporting a model to ONNX:
 
 Run the script:
 
-    python llm_inference.py --model_type=qwen2.5 --model=<path-to-qwen2.5.onnx> \
-        --tokenizer=<path-to-qwen2.5/config.json> --prompt="What is OpenCV?" \
+    python llm_inference.py --model_type=<gpt2|qwen2.5|gemma3> --model=<path-to-the-onnx-model> \
+        --tokenizer=<path-to-the-model's-config.json> --prompt="What is OpenCV?" \
         --max_new_tokens=64
 
     For a model of the same architecture family with different stop ids, chat template, etc.,

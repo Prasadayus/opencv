@@ -44,8 +44,8 @@ Exporting a model to ONNX:
                 --task causal-lm-with-past gemma3_instruct_onnx_with_past/
 
 To run:
-    ./example_dnn_llm_inference --model_type=qwen2.5 --model=/path/to/qwen2.5.onnx \
-        --tokenizer=/path/to/qwen2.5/config.json --prompt="What is OpenCV?" --max_new_tokens=64
+    ./example_dnn_llm_inference --model_type=<gpt2|qwen2.5|gemma3> --model=/path/to/the/onnx/model \
+        --tokenizer=/path/to/the/model's/config.json --prompt="What is OpenCV?" --max_new_tokens=64
 
 For a model of the same architecture family with different stop ids, chat template, etc., pass
 --config=/path/to/a/small/json/file to override individual LLMConfig fields on top of the chosen

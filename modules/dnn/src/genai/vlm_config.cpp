@@ -54,6 +54,7 @@ VLMConfig VLMConfig::defaultConfig(int modelType)
     case VLM_MODEL_PADDLEOCR_VL:
         config.preprocess = VLM_PREPROCESS_PATCHIFY;
         config.merge = VLM_MERGE_SCATTER;
+        config.imageTokenId = 100295;
         config.stopTokenIds = {2};
         config.promptPrefix = "<|begin_of_sentence|>User: <|IMAGE_START|>";
         config.imagePlaceholder = "<|IMAGE_PLACEHOLDER|>";
@@ -67,6 +68,7 @@ VLMConfig VLMConfig::defaultConfig(int modelType)
     case VLM_MODEL_GRANITE_DOCLING:
         config.preprocess = VLM_PREPROCESS_TILE_GRID;
         config.merge = VLM_MERGE_SCATTER;
+        config.imageTokenId = 100270;
         config.stopTokenIds = {2};
         config.promptPrefix = "<|start_of_role|>user<|end_of_role|>";
         config.imagePlaceholder = "<image>";
