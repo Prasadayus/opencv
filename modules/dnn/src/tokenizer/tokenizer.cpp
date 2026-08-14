@@ -267,19 +267,39 @@ static void registerDefaultTokenizers() {
     auto& reg = tokenizerRegistry();
     if (reg.find("BPE") == reg.end()) {
         reg["BPE"] = [](const FileStorage& cfg, const std::string& dir) -> Ptr<Tokenizer::Impl> {
-            std::string model_type;
-            cfg["model_type"] >> model_type;
             std::string tok_json = dir + "tokenizer.json";
 
-            CoreBPE core;
-            std::unordered_set<std::string> special;
-            if (model_type == "gpt2" || model_type == "gpt4") {
-                core = buildTokenizerFromJson(model_type, tok_json);
-            } else if (model_type == "qwen2" || model_type == "qwen2.5") {
-                core = buildTokenizerFromJson(model_type, tok_json, &special);
-            } else {
-                CV_Error(cv::Error::StsError, "Unsupported model_type for BPE: " + model_type);
+            cv::FileStorage tokFs(tok_json, cv::FileStorage::READ | cv::FileStorage::FORMAT_JSON);
+            if (!tokFs.isOpened())
+                CV_Error(cv::Error::StsError, "Failed to open tokenizer.json: " + tok_json);
+
+            // tokenizer.json's own model.byte_fallback distinguishes SentencePiece-style
+            // BPE (space normalized to the metaspace char, byte-fallback for unknown
+            // chars) from plain byte-level BPE; detect it here rather than trust a
+            // caller-supplied method, so pointing at a model's own (non-OpenCV) config
+            // still resolves to the right tokenizer.
+            bool byteFallback = false;
+            tokFs["model"]["byte_fallback"] >> byteFallback;
+            if (byteFallback) {
+                std::unordered_set<std::string> special;
+                return buildSentencePieceFromJson(tok_json, &special);
             }
+
+            // model_type selects the byte-level split regex and special-token set.
+            // tokenizer.json carries no such field, so it comes from cfg; a cfg not
+            // authored for this loader (e.g. a model's own HF config.json) won't have
+            // a recognized value here -- default to gpt2, the common convention,
+            // rather than error.
+            std::string model_type = "gpt2";
+            std::string requested;
+            cfg["model_type"] >> requested;
+            if (requested == "gpt2" || requested == "gpt4" || requested == "qwen2" || requested == "qwen2.5")
+                model_type = requested;
+
+            // Special added_tokens must be captured for every model_type, not just
+            // qwen2/qwen2.5 -- otherwise they get silently BPE-split.
+            std::unordered_set<std::string> special;
+            CoreBPE core = buildTokenizerFromJson(model_type, tok_json, &special);
             return makePtr<BpeTokenizerImpl>(std::move(core), std::move(special));
         };
     }

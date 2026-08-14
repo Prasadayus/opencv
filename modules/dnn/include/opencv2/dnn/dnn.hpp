@@ -2105,6 +2105,242 @@ private:
     Ptr<Impl> impl_;
 };
 
+/** @brief Causal language models with a built-in LLMConfig preset.
+ *  @see LLMConfig::defaultConfig
+ */
+enum LLMModelType
+{
+    LLM_MODEL_GPT2    = 0, //!< GPT-2, single `idx` input, no chat template
+    LLM_MODEL_QWEN2_5 = 1, //!< Qwen2.5-Instruct, ChatML template
+    LLM_MODEL_GEMMA3  = 2  //!< Gemma3-it, `<start_of_turn>` template
+};
+
+/** @brief Everything a decode loop needs to know about a causal language model.
+ *
+ * A preset covers the models in LLMModelType; any other model of the same shape is described by
+ * filling this in directly, so supporting it needs no library change.
+ */
+struct CV_EXPORTS_W_SIMPLE LLMConfig
+{
+    CV_WRAP LLMConfig();
+
+    /** @brief Preset for one of the LLMModelType models. Throws for an unknown type. */
+    CV_WRAP static LLMConfig defaultConfig(int modelType);
+
+    //! Overwrites only the fields present in @p fn, so a file may override a preset in part.
+    CV_WRAP void read(const FileNode& fn);
+    CV_WRAP void write(FileStorage& fs) const;
+
+    CV_PROP_RW String inputIdsName;      //!< token-id input; "idx" for the nanoGPT GPT-2 export
+    CV_PROP_RW String attentionMaskName; //!< empty when the graph has no such input
+    CV_PROP_RW String positionIdsName;   //!< empty when the graph has no such input
+    CV_PROP_RW std::vector<int> stopTokenIds; //!< empty stops only at maxNewTokens
+    CV_PROP_RW int bosTokenId;           //!< prepended to the prompt; -1 to prepend nothing
+    CV_PROP_RW String promptPrefix;      //!< chat template, wrapped around the user text
+    CV_PROP_RW String promptSuffix;
+    //! Reuse past keys/values. A property of the export, not of the model
+    //! family, so no preset enables it.
+    CV_PROP_RW bool useKVCache;
+    CV_PROP_RW int idType;               //!< CV_64S or CV_32S, matching the graph's id inputs
+    CV_PROP_RW int engine;               //!< EngineType, default ENGINE_AUTO
+    CV_PROP_RW int backend;              //!< default DNN_BACKEND_DEFAULT
+    CV_PROP_RW int target;               //!< default DNN_TARGET_CPU
+};
+
+/** @brief Base of the generative models, holding the tokenizer and per-generation state.
+ *
+ * Construct a concrete model with LLM::create; a default-constructed object has no state and every
+ * accessor throws.
+ */
+class CV_EXPORTS_W_SIMPLE GenerativeModel
+{
+public:
+    GenerativeModel();
+    GenerativeModel(const GenerativeModel&) = default;
+    GenerativeModel(GenerativeModel&&) = default;
+    GenerativeModel& operator=(const GenerativeModel&) = default;
+    GenerativeModel& operator=(GenerativeModel&&) = default;
+
+    /** @brief Drop the generation state, so the next call starts from an empty context. */
+    CV_WRAP void reset();
+
+    /** @brief Prompt plus generated tokens counted by the most recent generate() call. */
+    CV_WRAP int lastTokensUsed() const;
+
+    CV_WRAP Tokenizer getTokenizer() const;
+
+    struct Impl;
+protected:
+    Ptr<Impl> impl;
+};
+
+/** @brief Text generation with a causal language model.
+ *
+ * @code
+ * LLM llm = LLM::create(LLM_MODEL_QWEN2_5, "qwen2.5.onnx", "qwen2.5/config.json");
+ * String answer = llm.generate("What is OpenCV?", 64);
+ * @endcode
+ */
+class CV_EXPORTS_W_SIMPLE LLM : public GenerativeModel
+{
+public:
+    LLM();
+
+    /** @brief Load a model described by an explicit config.
+     *  @param model            Path to the ONNX model.
+     *  @param tokenizerConfig  Path to the OpenCV tokenizer config.json. @see Tokenizer::load
+     *  @param config           Graph input names, stop tokens, chat template, engine and target.
+     */
+    CV_WRAP static LLM create(CV_WRAP_FILE_PATH const String& model,
+                              CV_WRAP_FILE_PATH const String& tokenizerConfig,
+                              const LLMConfig& config);
+
+    /** @brief Load one of the LLMModelType models using its preset.
+     *  @see LLMConfig::defaultConfig
+     */
+    CV_WRAP static LLM create(int modelType,
+                              CV_WRAP_FILE_PATH const String& model,
+                              CV_WRAP_FILE_PATH const String& tokenizerConfig);
+
+    /** @brief Wrap @p prompt in the configured chat template and greedily decode a continuation.
+     *  @return The generated text only, without the prompt and without a trailing stop token.
+     */
+    CV_WRAP String generate(const String& prompt, int maxNewTokens = 64);
+
+    CV_WRAP LLMConfig getConfig() const;
+
+    //! The underlying network, for callers that need to drive it directly.
+    CV_WRAP Net getNet() const;
+};
+
+/** @brief Vision-language models with a built-in VLMConfig preset.
+ *  @see VLMConfig::defaultConfig
+ */
+enum VLMModelType
+{
+    VLM_MODEL_PALIGEMMA2      = 0, //!< PaliGemma2, fixed 224x224 input
+    VLM_MODEL_PADDLEOCR_VL    = 1, //!< PaddleOCR-VL, document OCR
+    VLM_MODEL_GRANITE_DOCLING = 2  //!< Granite-Docling, doctag page markup
+};
+
+/** @brief How an image becomes the vision encoder's input.
+ *
+ * Each mode covers a model family rather than one model, so a new model usually needs only
+ * different VLMConfig values.
+ */
+enum VLMPreprocess
+{
+    VLM_PREPROCESS_FIXED_SIZE = 0, //!< Resize to VLMConfig::imageSize (PaliGemma2, SigLIP-style)
+    VLM_PREPROCESS_PATCHIFY   = 1, //!< Aspect-preserving resize, then a patch grid (Qwen2-VL)
+    VLM_PREPROCESS_TILE_GRID  = 2  //!< Tile grid plus a global thumbnail (SmolVLM/Idefics3)
+};
+
+/** @brief How image features join the text embeddings. */
+enum VLMEmbedMerge
+{
+    VLM_MERGE_CONCAT  = 0, //!< Prepend the features to the text embeddings
+    VLM_MERGE_SCATTER = 1  //!< Write the features over VLMConfig::imageTokenId positions
+};
+
+/** @brief Everything a vision-language decode loop needs to know about a model.
+ *
+ * Fields are documented with the VLMPreprocess mode that reads them; the rest apply to every mode.
+ */
+struct CV_EXPORTS_W_SIMPLE VLMConfig
+{
+    CV_WRAP VLMConfig();
+
+    /** @brief Preset for one of the VLMModelType models. Throws for an unknown type. */
+    CV_WRAP static VLMConfig defaultConfig(int modelType);
+
+    //! Overwrites only the fields present in @p fn, so a file may override a preset in part.
+    CV_WRAP void read(const FileNode& fn);
+    CV_WRAP void write(FileStorage& fs) const;
+
+    CV_PROP_RW int preprocess;          //!< VLMPreprocess
+    CV_PROP_RW int merge;               //!< VLMEmbedMerge
+
+    CV_PROP_RW Size imageSize;          //!< FIXED_SIZE: the exact input size
+    CV_PROP_RW int patchSize;           //!< PATCHIFY: vision patch edge
+    CV_PROP_RW int mergeSize;           //!< PATCHIFY: patches merged per token, per axis
+    CV_PROP_RW int minPixels;           //!< PATCHIFY: lower bound on resized area
+    CV_PROP_RW int maxPixels;           //!< PATCHIFY: upper bound on resized area
+    CV_PROP_RW int longestEdge;         //!< TILE_GRID: longest edge before tiling
+    CV_PROP_RW int maxTileEdge;         //!< TILE_GRID: tile edge
+    CV_PROP_RW int imageSeqLen;         //!< TILE_GRID: image tokens per tile
+
+    CV_PROP_RW Scalar mean;             //!< subtracted per channel, after rescaling
+    CV_PROP_RW Scalar stddev;           //!< divides per channel, after the mean
+    CV_PROP_RW double rescaleFactor;    //!< scales raw pixels, usually 1/255
+
+    CV_PROP_RW int imageTokenId;        //!< SCATTER: the placeholder id; unused by CONCAT
+    CV_PROP_RW std::vector<int> stopTokenIds;
+    CV_PROP_RW String promptPrefix;     //!< before the image block
+    CV_PROP_RW String imagePlaceholder; //!< repeated once per image token
+    CV_PROP_RW String promptInfix;      //!< between the image block and the user text
+    CV_PROP_RW String promptSuffix;     //!< after the user text
+    //! Unlike LLMConfig, a preset may enable this: it also names the decoder export, and these
+    //! decoders are with-past merged graphs.
+    CV_PROP_RW bool useKVCache;
+    CV_PROP_RW int idType;              //!< CV_64S or CV_32S, matching the graph's id inputs
+    CV_PROP_RW String attentionMaskName; //!< decoder input name; empty when the graph has none
+
+    CV_PROP_RW String visionNet;        //!< paths relative to VLM::create's modelDir
+    CV_PROP_RW String embedNet;
+    CV_PROP_RW String decoderNet;
+
+    CV_PROP_RW int engine;              //!< EngineType, default ENGINE_AUTO
+    CV_PROP_RW int backend;             //!< default DNN_BACKEND_DEFAULT
+    CV_PROP_RW int target;              //!< default DNN_TARGET_CPU
+};
+
+/** @brief Text generation conditioned on an image.
+ *
+ * The model is three ONNX graphs -- a vision encoder, a token embedding and a decoder -- driven
+ * as one.
+ *
+ * @code
+ * VLM vlm = VLM::create(VLM_MODEL_PALIGEMMA2, "paligemma2/", "paligemma2/config.json");
+ * String caption = vlm.generate(imread("cat.jpg"), "cap en\n", 64);
+ * @endcode
+ */
+class CV_EXPORTS_W_SIMPLE VLM : public GenerativeModel
+{
+public:
+    VLM();
+
+    /** @brief Load a model described by an explicit config.
+     *  @param modelDir         Directory holding the graphs named by @p config. May be empty if
+     *  every one of VLMConfig::visionNet, ::embedNet, ::decoderNet is already a full path.
+     *  @param tokenizerConfig  Path to the OpenCV tokenizer config.json. @see Tokenizer::load
+     *  @param config           Preprocessing, merge mode, prompt template, engine and target.
+     */
+    CV_WRAP static VLM create(CV_WRAP_FILE_PATH const String& modelDir,
+                              CV_WRAP_FILE_PATH const String& tokenizerConfig,
+                              const VLMConfig& config);
+
+    /** @brief Load one of the VLMModelType models using its preset.
+     *  @see VLMConfig::defaultConfig
+     */
+    CV_WRAP static VLM create(int modelType,
+                              CV_WRAP_FILE_PATH const String& modelDir,
+                              CV_WRAP_FILE_PATH const String& tokenizerConfig);
+
+    /** @brief Describe @p image, guided by @p prompt.
+     *  @param image          BGR image, as returned by imread().
+     *  @param prompt         Task text; the configured template is wrapped around it.
+     *  @param maxNewTokens   Upper bound on generated tokens.
+     *  @return The generated text only, without a trailing stop token.
+     */
+    CV_WRAP String generate(InputArray image, const String& prompt = String(),
+                            int maxNewTokens = 512);
+
+    CV_WRAP VLMConfig getConfig() const;
+
+    //! The vision encoder, token embedding and decoder graphs, in that order.
+    CV_WRAP std::vector<Net> getNets() const;
+};
+
 //! @}
 CV__DNN_INLINE_NS_END
 }
