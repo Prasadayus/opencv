@@ -271,11 +271,16 @@ void Domain_Filter::compute_boxfilter(Mat &output, Mat &hz, Mat &psketch, float 
             {
                 if(domain_row.at<float>(0,k) > lower_pos_row.at<float>(0,j))
                 {
-                    temp = count;
                     break;
                 }
                 count++;
             }
+            // count reflects how far k advanced this iteration whether or not
+            // the loop above found a match before running out of columns --
+            // assigning it unconditionally (not just on the match branch)
+            // keeps temp from ever reusing a stale value from an earlier,
+            // unrelated j when this row's search runs to the end without a hit.
+            temp = count;
 
             temp_lower_idx.at<float>(0,j) = temp_lower_idx.at<float>(0,j-1) + temp;
 
@@ -286,11 +291,11 @@ void Domain_Filter::compute_boxfilter(Mat &output, Mat &hz, Mat &psketch, float 
 
                 if(domain_row.at<float>(0,k) > upper_pos_row.at<float>(0,j))
                 {
-                    temp = count;
                     break;
                 }
                 count++;
             }
+            temp = count;
 
             temp_upper_idx.at<float>(0,j) = temp_upper_idx.at<float>(0,j-1) + temp;
         }
