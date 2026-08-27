@@ -80,6 +80,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -103,10 +104,22 @@ namespace opencv_test { namespace {
 class StdThreadParallelBackend CV_FINAL : public cv::parallel::ParallelForAPI
 {
 public:
-    StdThreadParallelBackend() : numThreads_(cv::getNumberOfCPUs()) {}
+    StdThreadParallelBackend()
+        : numThreads_(cv::getNumberOfCPUs()), calls_(0), threadsSpawned_(0), maxNThreadsSeen_(0) {}
+
+    // Proof-of-life counters. Without these, a silently-failed
+    // setParallelForBackend() would leave the "control" running on PPL after all
+    // -- reporting clean by luck and inverting the conclusion. Any run that uses
+    // this backend as a control MUST check calls() > 0 and that
+    // maxNThreadsSeen() tracks the requested thread count.
+    long long calls() const          { return calls_.load(); }
+    long long threadsSpawned() const { return threadsSpawned_.load(); }
+    int maxNThreadsSeen() const      { return maxNThreadsSeen_.load(); }
 
     void parallel_for(int tasks, FN_parallel_for_body_cb_t body_callback, void* callback_data) CV_OVERRIDE
     {
+        calls_.fetch_add(1, std::memory_order_relaxed);
+
         if (tasks <= 0)
             return;
 
@@ -151,6 +164,16 @@ public:
             }
         };
 
+        // Record what we actually did, so the control can prove it ran.
+        {
+            int prev = maxNThreadsSeen_.load(std::memory_order_relaxed);
+            while (nThreads > prev &&
+                   !maxNThreadsSeen_.compare_exchange_weak(prev, nThreads,
+                                                           std::memory_order_relaxed))
+            {}
+        }
+        threadsSpawned_.fetch_add(nThreads - 1, std::memory_order_relaxed);
+
         std::vector<std::thread> pool;
         pool.reserve((size_t)nThreads - 1);
         for (int t = 0; t < nThreads - 1; ++t)
@@ -185,6 +208,9 @@ public:
 
 private:
     mutable std::atomic<int> numThreads_;
+    mutable std::atomic<long long> calls_;
+    mutable std::atomic<long long> threadsSpawned_;
+    mutable std::atomic<int> maxNThreadsSeen_;
 };
 
 // Installs a backend and puts the built-in one back, even if an assertion unwinds.
@@ -529,12 +555,27 @@ TEST(Imgproc_ParallelBackendAB, DISABLED_findContours_ppl_vs_stdthread)
 
     // --- B: identical decomposition, plain std::thread pool, standard join ---
     BackendResult stdResult;
+    long long ctlCalls = 0;
+    int ctlMaxNThreads = 0;
     {
         std::cout << "\n[B] std::thread backend (same stripes, standard join)" << std::endl;
-        ScopedBackendSwap swap(std::make_shared<StdThreadParallelBackend>());
+        std::shared_ptr<StdThreadParallelBackend> ctl = std::make_shared<StdThreadParallelBackend>();
+        ScopedBackendSwap swap(ctl);
         stdResult = measureDivergence(img);
+        ctlCalls       = ctl->calls();
+        ctlMaxNThreads = ctl->maxNThreadsSeen();
         printResult("std::thread", stdResult);
     }
+
+    // Without this, a silently-failed backend swap would leave [B] running on
+    // PPL, and "only the built-in diverges" would be an artifact of comparing
+    // PPL against itself.
+    std::cout << "  control proof-of-life: parallel_for calls=" << ctlCalls
+              << ", max thread count seen=" << ctlMaxNThreads
+              << " (expected calls>0)" << std::endl;
+    EXPECT_GT(ctlCalls, 0)
+        << "the std::thread backend never received a parallel_for call -- the swap "
+           "did not take effect, so the [A] vs [B] comparison is meaningless";
 
     std::cout << "\n----------------- verdict -----------------" << std::endl;
     if (pplResult.mismatches > 0 && stdResult.mismatches > 0)
@@ -546,11 +587,30 @@ TEST(Imgproc_ParallelBackendAB, DISABLED_findContours_ppl_vs_stdthread)
     }
     else if (pplResult.mismatches > 0 && stdResult.mismatches == 0)
     {
-        std::cout << "Only the built-in (PPL) backend diverges => strong evidence for\n"
-                  << "the runtime. Same code, same stripe decomposition, same hardware;\n"
-                  << "only the thread pool differs. Not absolute proof on its own -- a\n"
-                  << "different pool has different timing. Run ppl_contract_audit.cpp,\n"
-                  << "which tests PPL's documented guarantees directly." << std::endl;
+        std::cout << "Only the built-in (PPL) backend diverges => strong evidence that the\n"
+                  << "defect is in the parallel dispatch layer, not in the tracer.\n"
+                  << "Same code, same stripe decomposition (one stripe per label,\n"
+                  << "independent of thread count), same cores; only the pool differs.\n"
+                  << "Both pools run those stripes concurrently, so if the tracer shared\n"
+                  << "state between labels the std::thread run would corrupt too.\n\n"
+                  << "Two caveats, both real:\n"
+                  << " 1. A different pool has different timing (fresh threads + join vs a\n"
+                  << "    persistent work-stealing pool), so a genuine race could simply\n"
+                  << "    fail to trigger here. Strong signal, not proof.\n"
+                  << " 2. ppl_contract_audit.cpp -- no OpenCV linked, same machine, same\n"
+                  << "    scheduler policy and oversubscription -- found raw\n"
+                  << "    Concurrency::parallel_for honouring all four of its guarantees.\n"
+                  << "    So this is NOT simply \"PPL is broken\": if raw PPL is clean but\n"
+                  << "    PPL-through-parallel_for_ is not, the fault may lie in how\n"
+                  << "    OpenCV drives it (per-call Attach/Detach at parallel.cpp:600-609,\n"
+                  << "    or the global pplScheduler that setNumThreads destroys and\n"
+                  << "    recreates at :762) -- which would be OpenCV's bug, even though it\n"
+                  << "    only shows up under this backend.\n\n"
+                  << "Read the per-case lines above: where 'missing' equals 'extra' and the\n"
+                  << "totals match, contours were not LOST but traced with different\n"
+                  << "geometry -- corruption, not dropped work. Cases with missing > extra\n"
+                  << "and a lower total are genuine losses. The two may have different\n"
+                  << "mechanisms." << std::endl;
     }
     else if (pplResult.mismatches == 0 && stdResult.mismatches > 0)
     {
@@ -611,20 +671,24 @@ private:
     StripeAuditBody& operator=(const StripeAuditBody&);
 };
 
-TEST(Imgproc_ParallelBackendAB, DISABLED_stripe_delivery_audit)
+struct AuditResult
 {
-    applyOptionalCpuPinning();
+    long long skipped     = 0;
+    long long duplicated  = 0;
+    long long unpublished = 0;
+    std::vector<std::string> details;
+    bool clean() const { return skipped == 0 && duplicated == 0 && unpublished == 0; }
+};
 
-    const int kTrials = 2000;
-    const int kStripes = 997;       // prime, so chunking cannot divide evenly
-
-    std::cout << "\nauditing cv::parallel_for_ stripe delivery: " << kStripes
-              << " stripes x " << kTrials << " trials per thread count" << std::endl;
-    const char* fw = cv::currentParallelFramework();
-    std::cout << "backend: " << (fw ? fw : "(none/serial)")
-              << ", machine has " << cv::getNumberOfCPUs() << " logical CPUs\n" << std::endl;
-
-    long long totalSkipped = 0, totalDuplicated = 0, totalUnpublished = 0;
+// Runs the stripe-delivery audit under whichever backend is currently installed.
+//
+// Records WHICH stripe indices go missing, not just how many. A pattern there is
+// diagnostic: a contiguous run points at a whole chunk being dropped, clustering
+// at high indices points at a chunk-boundary/partitioner problem, and scattered
+// singletons point at something else entirely.
+static AuditResult runStripeAudit(const char* label, int kTrials, int kStripes)
+{
+    AuditResult res;
 
     // A representative spread rather than all of 2..39: this audit runs kTrials
     // dispatches per thread count, so the full sweep would be 38x the work for
@@ -649,11 +713,20 @@ TEST(Imgproc_ParallelBackendAB, DISABLED_stripe_delivery_audit)
             StripeAuditBody body(execCount, payload);
             cv::parallel_for_(Range(0, kStripes), body);
 
+            std::vector<int> missingIdx;
             for (int i = 0; i < kStripes; ++i)
             {
                 const int runs = execCount[i].load(std::memory_order_relaxed);
-                if (runs == 0)     ++skipped;
-                else if (runs > 1) duplicated += (runs - 1);
+                if (runs == 0)
+                {
+                    ++skipped;
+                    if (missingIdx.size() < 40)
+                        missingIdx.push_back(i);
+                }
+                else if (runs > 1)
+                {
+                    duplicated += (runs - 1);
+                }
 
                 if (runs >= 1 && payload[i] != i + 1)
                     ++unpublished;
@@ -661,43 +734,177 @@ TEST(Imgproc_ParallelBackendAB, DISABLED_stripe_delivery_audit)
 
             if (skipped || duplicated || unpublished)
             {
-                std::cout << "  !!! violation at nthreads=" << t
-                          << " trial=" << trial << std::endl;
-                break;
+                std::string idxList;
+                for (size_t k = 0; k < missingIdx.size(); ++k)
+                    idxList += (k ? "," : "") + std::to_string(missingIdx[k]);
+                res.details.push_back(cv::format(
+                    "  [%s] nthreads=%d trial=%d: skipped=%lld duplicated=%lld unpublished=%lld"
+                    "  missing stripe indices: %s",
+                    label, t, trial, skipped, duplicated, unpublished,
+                    idxList.empty() ? "(none)" : idxList.c_str()));
+                break;   // one reproduction per thread count is enough
             }
         }
 
-        std::cout << "  nthreads=" << t
+        std::cout << "  [" << label << "] nthreads=" << t
                   << ": skipped=" << skipped
                   << " duplicated=" << duplicated
                   << " unpublished=" << unpublished << std::endl;
 
-        totalSkipped += skipped;
-        totalDuplicated += duplicated;
-        totalUnpublished += unpublished;
+        res.skipped     += skipped;
+        res.duplicated  += duplicated;
+        res.unpublished += unpublished;
     }
 
-    std::cout << "\n----------------- verdict -----------------" << std::endl;
-    if (totalSkipped || totalDuplicated || totalUnpublished)
+    for (size_t i = 0; i < res.details.size(); ++i)
+        std::cout << res.details[i] << std::endl;
+
+    return res;
+}
+
+// Audits stripe delivery under BOTH backends, so the result can distinguish a
+// real runtime defect from a bug in this diagnostic.
+//
+// Why the control is essential: an earlier version of this test ran only under
+// the built-in backend, found 27 skipped stripes on the CI runner, and printed
+// "CONCLUSIVE". That claim was wrong. The standalone ppl_contract_audit.cpp --
+// no OpenCV linked, same machine, same scheduler policy, same oversubscription,
+// ~30M dispatches -- found raw Concurrency::parallel_for delivering every index
+// exactly once. Two measurements of the same runtime disagreed, so neither was
+// usable on its own. This version resolves that:
+//
+//   built-in skips AND std::thread skips  -> this diagnostic is buggy; the
+//                                            earlier 27-stripe result is an
+//                                            artifact and must be discarded.
+//   built-in skips, std::thread clean     -> stripes really are lost when PPL is
+//                                            driven through cv::parallel_for_,
+//                                            even though raw PPL is clean. The
+//                                            defect then lives in that dispatch
+//                                            path -- which could be PPL itself
+//                                            OR how OpenCV drives it (the
+//                                            per-call Attach/Detach at
+//                                            parallel.cpp:600-609, or the global
+//                                            pplScheduler that setNumThreads
+//                                            destroys and recreates at :762).
+//                                            Those are different bugs with
+//                                            different owners; this test narrows
+//                                            the location, it does not assign
+//                                            blame.
+//   both clean                            -> not reproduced this run. These
+//                                            failures are intermittent; raise
+//                                            kTrials before concluding anything.
+TEST(Imgproc_ParallelBackendAB, DISABLED_stripe_delivery_audit)
+{
+    applyOptionalCpuPinning();
+
+    const int kTrials = 2000;
+    const int kStripes = 997;       // prime, so chunking cannot divide evenly
+
+    std::cout << "\nauditing cv::parallel_for_ stripe delivery: " << kStripes
+              << " stripes x " << kTrials << " trials per thread count, per backend" << std::endl;
+    const char* fw = cv::currentParallelFramework();
+    std::cout << "compiled-in framework: " << (fw ? fw : "(none/serial)")
+              << ", machine has " << cv::getNumberOfCPUs() << " logical CPUs\n" << std::endl;
+
+    // --- A: the compiled-in backend (ms-concurrency/PPL on this CI) ---
+    const AuditResult builtin = runStripeAudit("built-in", kTrials, kStripes);
+
+    std::cout << std::endl;
+
+    // --- B: the control. Same audit, same stripes, plain std::thread pool. ---
+    AuditResult stdthread;
+    long long ctlCalls = 0, ctlThreads = 0;
+    int ctlMaxNThreads = 0;
     {
-        std::cout << "The runtime failed to deliver stripes correctly. OpenCV fixes the\n"
-                  << "stripe count before dispatch, so no OpenCV defect can skip or\n"
-                  << "duplicate one, nor lose a worker's plain write across the join.\n"
-                  << "This is the runtime's contract, and it is broken here: CONCLUSIVE."
+        std::shared_ptr<StdThreadParallelBackend> ctl = std::make_shared<StdThreadParallelBackend>();
+        ScopedBackendSwap swap(ctl);
+        stdthread = runStripeAudit("std::thread", kTrials, kStripes);
+        ctlCalls       = ctl->calls();
+        ctlThreads     = ctl->threadsSpawned();
+        ctlMaxNThreads = ctl->maxNThreadsSeen();
+    }
+
+    // Prove the control actually ran on std::thread. A silently-failed
+    // setParallelForBackend() would leave it running on PPL, reporting "clean"
+    // for the wrong reason and inverting the conclusion below.
+    std::cout << "\ncontrol proof-of-life: parallel_for calls=" << ctlCalls
+              << ", threads spawned=" << ctlThreads
+              << ", max thread count seen=" << ctlMaxNThreads
+              << " (expected calls>0 and max=39)" << std::endl;
+    const bool controlReallyRan = (ctlCalls > 0);
+
+    std::cout << "\n----------------- verdict -----------------" << std::endl;
+    std::cout << "built-in   : skipped=" << builtin.skipped
+              << " duplicated=" << builtin.duplicated
+              << " unpublished=" << builtin.unpublished << std::endl;
+    std::cout << "std::thread: skipped=" << stdthread.skipped
+              << " duplicated=" << stdthread.duplicated
+              << " unpublished=" << stdthread.unpublished << std::endl << std::endl;
+
+    if (!controlReallyRan)
+    {
+        std::cout << "RESULT: UNUSABLE -- the std::thread control never received a single\n"
+                  << "parallel_for call, so setParallelForBackend did not take effect and\n"
+                  << "the \"control\" was still running on the compiled-in backend. Neither\n"
+                  << "column above means anything. Fix the backend swap first." << std::endl;
+    }
+    else if (!builtin.clean() && !stdthread.clean())
+    {
+        std::cout << "RESULT: BOTH backends lost stripes => THIS DIAGNOSTIC IS BUGGY.\n"
+                  << "A plain std::thread pool with a standard join cannot plausibly drop\n"
+                  << "work items, so the fault is in this test's own counting, not in any\n"
+                  << "runtime. Discard the built-in numbers and fix the test." << std::endl;
+    }
+    else if (!builtin.clean() && stdthread.clean())
+    {
+        std::cout << "RESULT: only the compiled-in backend lost stripes; the std::thread\n"
+                  << "control was clean. So stripes really are lost when PPL is driven\n"
+                  << "through cv::parallel_for_ -- even though the standalone audit found\n"
+                  << "raw Concurrency::parallel_for delivering every index correctly on\n"
+                  << "this same machine.\n\n"
+                  << "This localises the defect to OpenCV's PPL dispatch path. It does NOT\n"
+                  << "by itself say whose bug it is: candidates are PPL/ConcRT itself, the\n"
+                  << "per-call Attach/Detach at parallel.cpp:600-609, and the global\n"
+                  << "pplScheduler that setNumThreads destroys and recreates at :762.\n"
+                  << "Check the missing-stripe indices printed above for a pattern."
                   << std::endl;
+    }
+    else if (builtin.clean() && !stdthread.clean())
+    {
+        std::cout << "RESULT: only the std::thread control lost stripes. Unexpected --\n"
+                  << "suspect this diagnostic's own backend before concluding anything\n"
+                  << "about OpenCV or PPL." << std::endl;
     }
     else
     {
-        std::cout << "Stripe delivery is correct: every stripe ran exactly once and every\n"
-                  << "worker write was visible after the join. So the FindTRUContours\n"
-                  << "divergence is NOT explained by lost/duplicated stripes or by\n"
-                  << "join visibility -- which points back at state shared between\n"
-                  << "labels in OpenCV's own tracer." << std::endl;
+        std::cout << "RESULT: both backends delivered every stripe exactly once, and every\n"
+                  << "plain worker write was visible after the join. Not reproduced this\n"
+                  << "run -- these failures are intermittent, so raise kTrials before\n"
+                  << "reading anything into it." << std::endl;
     }
 
-    EXPECT_EQ(0, totalSkipped)      << "cv::parallel_for_ never executed some stripes";
-    EXPECT_EQ(0, totalDuplicated)   << "cv::parallel_for_ executed some stripes more than once";
-    EXPECT_EQ(0, totalUnpublished)  << "a worker's plain write was not visible to the caller after the join";
+    // The control must actually have run, or nothing here is interpretable.
+    EXPECT_GT(ctlCalls, 0)
+        << "the std::thread control never received a parallel_for call -- "
+           "setParallelForBackend did not take effect, so both columns are meaningless";
+
+    // The control must be clean, or this test is measuring its own bug.
+    EXPECT_EQ(0, stdthread.skipped)
+        << "the std::thread control also lost stripes -- this diagnostic is buggy, "
+           "so the built-in backend's numbers cannot be trusted";
+    EXPECT_EQ(0, stdthread.unpublished)
+        << "the std::thread control lost a plain worker write across a standard join "
+           "-- this diagnostic is buggy";
+
+    // Reported separately so a failure here is unmistakably about the runtime
+    // rather than about the diagnostic.
+    EXPECT_EQ(0, builtin.skipped)
+        << "cv::parallel_for_ never executed some stripes under the compiled-in backend";
+    EXPECT_EQ(0, builtin.duplicated)
+        << "cv::parallel_for_ executed some stripes more than once under the compiled-in backend";
+    EXPECT_EQ(0, builtin.unpublished)
+        << "a worker's plain write was not visible to the caller after the join, "
+           "under the compiled-in backend";
 }
 
 }} // namespace
