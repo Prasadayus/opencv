@@ -884,4 +884,150 @@ TEST(cvtColorUYVY, size_issue_21035)
     EXPECT_THROW(cv::cvtColor(input, output, cv::COLOR_YUV2BGR_UYVY), cv::Exception);
 }
 
+// Deterministic, single-threaded size sweep for the conversions that show up in
+// the ARM64 CI failures.
+//
+// Why this exists: Imgproc_ColorYUV.accuracy draws BOTH its image size and its
+// pixel data from theRNG(), 30 iterations per case. parallel_for_'s finalize()
+// advances the calling thread's RNG by one next() whenever a worker touched the
+// RNG, and its own comment notes "this behaviour is not equal to single-threaded
+// mode" -- so the set of sizes the randomized test actually visits depends on
+// threading. That makes the failures look random and non-reproducible even if the
+// underlying defect is a plain size-dependent one.
+//
+// So: pin the thread count to 1, drop theRNG() entirely in favour of a local
+// fixed-seed RNG, and walk the sizes exhaustively instead of sampling them. Every
+// comparison here is cvtColor against this file's own reference implementation --
+// the same oracle the accuracy test uses -- so a mismatch is a real correctness
+// bug in the conversion at that size, reachable with threading switched off and
+// nothing to do with the parallel backend. A clean run is equally informative: it
+// says the conversions are correct across the whole size range and the CI failures
+// have to come from somewhere other than size-dependent conversion logic.
+//
+// Disabled by default because it is a diagnostic sweep, not a regression test.
+// Run with: opencv_test_imgproc --gtest_also_run_disabled_tests \
+//                              --gtest_filter='Imgproc_ColorYUV_SizeSweep.*'
+TEST(Imgproc_ColorYUV_SizeSweep, DISABLED_deterministic_size_sweep)
+{
+    const int codes[] = {
+        // 4:2:0 read paths
+        COLOR_YUV2RGB_NV21, COLOR_YUV2BGR_NV21, COLOR_YUV2RGBA_NV12,
+        COLOR_YUV2BGR_YV12, COLOR_YUV2RGB_YV12, COLOR_YUV2RGB_IYUV,
+        // 4:2:0 write paths
+        COLOR_RGBA2YUV_YV12, COLOR_BGRA2YUV_YV12, COLOR_BGR2YUV_I420,
+        // 4:2:2 read paths
+        COLOR_YUV2RGB_UYVY, COLOR_YUV2RGBA_UYVY, COLOR_YUV2RGB_YUY2,
+        COLOR_YUV2RGB_YVYU, COLOR_YUV2BGR_YVYU, COLOR_YUV2RGBA_YVYU,
+        // 4:2:2 write paths
+        COLOR_RGB2YUV_UYVY, COLOR_BGRA2YUV_UYVY, COLOR_RGBA2YUV_YUY2,
+        COLOR_BGRA2YUV_YVYU,
+    };
+
+    // Full 640x480 cross-product is ~300k sizes per code, far too slow. A
+    // size-dependent conversion bug lives in width remainders (SIMD lane
+    // tails, the /2 chroma split) or in degenerate small dimensions, so sweep
+    // each dimension exhaustively against a couple of fixed values for the
+    // other -- one below the 320*240 parallel threshold, one above it.
+    const int probeHeights[] = { 2, 16, 240, 480 };
+    const int probeWidths[]  = { 2, 16, 320, 640 };
+
+    const int savedThreads = cv::getNumThreads();
+    cv::setNumThreads(1);   // threading out of the picture entirely
+
+    size_t totalChecked = 0, totalMismatched = 0;
+
+    for (size_t ci = 0; ci < sizeof(codes) / sizeof(codes[0]); ++ci)
+    {
+        const int code = codes[ci];
+        const bool yuv422 = is_rgb2yuv422(code);
+
+        ConversionYUV cvt(code);
+        const int scn = cvt.getScn();
+        const int dcn = cvt.getDcn();
+
+        std::vector<Size> sizes;
+        for (size_t hi = 0; hi < sizeof(probeHeights) / sizeof(probeHeights[0]); ++hi)
+            for (int w = 1; w <= 640; ++w)
+                sizes.push_back(Size(w, probeHeights[hi]));
+        for (size_t wi = 0; wi < sizeof(probeWidths) / sizeof(probeWidths[0]); ++wi)
+            for (int h = 1; h <= 480; ++h)
+                sizes.push_back(Size(probeWidths[wi], h));
+
+        int mismatchesForCode = 0;
+        Size firstBadSize(0, 0);
+        int firstBadDiff = 0;
+
+        for (size_t si = 0; si < sizes.size(); ++si)
+        {
+            Size sz = sizes[si];
+            if (cvt.requiresEvenWidth())  sz.width  += sz.width  % 2;
+            if (cvt.requiresEvenHeight()) sz.height += sz.height % 2;
+
+            // Local fixed-seed RNG: identical pixel data for a given size on
+            // every run and every machine, so a mismatch is reproducible.
+            RNG rng(0x12345678u + (uint64)si * 7919u + (uint64)ci * 104729u);
+
+            Size srcSize = cvt.getSrcSize(sz);
+            Mat src = Mat(srcSize.height, srcSize.width * scn, CV_8UC1).reshape(scn);
+            rng.fill(src, RNG::UNIFORM, 0, 256);
+
+            Size dstSize = cvt.getDstSize(sz);
+            Mat dst = Mat(dstSize.height, dstSize.width * dcn, CV_8UC1).reshape(dcn);
+            Mat gold(dstSize, CV_8UC(dcn));
+
+            if (cvt.rgbWriter_)
+                referenceYUV2RGB<YUV2RGB_Converter>(src, gold, cvt.yuvReader_, cvt.rgbWriter_);
+            else if (cvt.grayWriter_)
+                referenceYUV2GRAY<YUV2GRAY_Converter>(src, gold, cvt.yuvReader_, cvt.grayWriter_);
+            else if (cvt.yuvWriter_)
+            {
+                if (!yuv422)
+                    referenceRGB2YUV<RGB2YUV_Converter>(src, gold, cvt.rgbReader_, cvt.yuvWriter_);
+                else
+                    referenceRGB2YUV422<RGB2YUV422_Converter>(src, gold, cvt.rgbReader_, cvt.yuvWriter_);
+            }
+            else
+            {
+                continue;   // no oracle for this code, nothing to compare against
+            }
+
+            cv::cvtColor(src, dst, code, -1);
+
+            const int diff = countOfDifferencies(gold, dst);
+            ++totalChecked;
+            if (diff != 0)
+            {
+                ++totalMismatched;
+                if (mismatchesForCode == 0)
+                {
+                    firstBadSize = sz;
+                    firstBadDiff = diff;
+                }
+                ++mismatchesForCode;
+            }
+        }
+
+        if (mismatchesForCode != 0)
+        {
+            std::cout << "[SIZE-DEPENDENT BUG] code=" << code
+                      << " mismatching sizes=" << mismatchesForCode
+                      << " first=" << firstBadSize.width << "x" << firstBadSize.height
+                      << " differingPixels=" << firstBadDiff << std::endl;
+        }
+    }
+
+    cv::setNumThreads(savedThreads);
+
+    std::cout << "size sweep: checked " << totalChecked
+              << " (code,size) pairs single-threaded, " << totalMismatched
+              << " mismatched" << std::endl;
+
+    // A mismatch here is a correctness bug in the conversion itself: fixed input,
+    // one thread, compared against the test suite's own reference.
+    EXPECT_EQ((size_t)0, totalMismatched)
+        << "cvtColor disagrees with the reference implementation at specific image "
+           "sizes with threading disabled -- a size-dependent conversion bug, "
+           "independent of the parallel backend.";
+}
+
 } // namespace
