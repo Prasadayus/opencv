@@ -314,16 +314,44 @@ int main(int argc, char** argv)
     printf("nthreads_consistency test drives setNumThreads(2..39) on it, so the\n");
     printf("high-thread configurations below are ~9x oversubscribed -- matching CI.\n");
 
-    // Mirrors what the OpenCV test actually does. Low counts first so a failure
-    // that only appears under oversubscription is unmistakable in the output.
+    // 997 tasks at EVERY thread count -- do not go back to scaling the task
+    // count with the thread count.
+    //
+    // The first version of this file paired small task counts with small thread
+    // counts (64 tasks at 2 and 4 threads, 128 at 8, 256 at 14, 512 at 38, and
+    // 997 only at 39). It came back clean, which looked like it exonerated PPL.
+    // It did not: the in-situ audit in
+    // modules/imgproc/test/test_parallel_backend_ab.cpp drives 997 tasks at
+    // EVERY thread count, and its worst failure -- 86 consecutive stripes
+    // (911..996, i.e. the entire tail of the range) silently never executed --
+    // occurred at nThreads=4, where this file was only ever testing 64 tasks.
+    // The two results appeared to contradict each other purely because this one
+    // never exercised the failing combination.
+    //
+    // 997 is prime, so no chunking scheme divides it evenly -- which matters,
+    // because the losses observed in situ are CONTIGUOUS RUNS (1, 3, 4, 18 and
+    // 86 consecutive indices), the signature of a whole chunk being assigned and
+    // then never run.
+    //
+    // If this now reports [2] indices never executed > 0, that is raw
+    // Concurrency::parallel_for failing to execute part of its own range with NO
+    // OpenCV linked into the binary -- proof the defect is PPL's, not OpenCV's.
+    // 2000 trials, not 20000. Raising the task count to 997 everywhere already
+    // multiplies the work; keeping 20000 trials would mean 7 x 20000 x 997 =
+    // ~140M dispatches, roughly 4.7x the previous run, on a job that has already
+    // had one step hang. 2000 is ample: in situ, the FIRST violation at each
+    // thread count appeared at trial 58, 53, 90, 7 and 143 respectively, so
+    // 2000 trials leaves better than a 10x margin while total work (~14M
+    // dispatches) stays BELOW the previous run's ~30M.
     struct Config { int nThreads; int tasks; long long trials; const char* label; };
     const Config configs[] = {
-        {  2,  64, 20000, "2 threads, light"              },
-        {  4,  64, 20000, "4 threads (= runner vCPUs)"    },
-        {  8, 128, 20000, "8 threads, 2x oversubscribed"  },
-        { 14, 256, 20000, "14 threads (a failing count)"  },
-        { 38, 512, 20000, "38 threads (a failing count)"  },
-        { 39, 997, 10000, "39 threads, prime task count"  },
+        {  2, 997, 2000, "2 threads (1 vproc -- no real concurrency)" },
+        {  3, 997, 2000, "3 threads"                                  },
+        {  4, 997, 2000, "4 threads (= runner vCPUs, worst in situ)"   },
+        {  8, 997, 2000, "8 threads"                                   },
+        { 14, 997, 2000, "14 threads (a failing count)"                },
+        { 38, 997, 2000, "38 threads (a failing count)"                },
+        { 39, 997, 2000, "39 threads"                                  },
     };
 
     bool anyViolation = false;

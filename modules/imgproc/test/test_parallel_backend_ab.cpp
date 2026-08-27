@@ -457,40 +457,61 @@ struct BackendResult
 // counting how often the contour set diverges from that method's reference.
 // Sweeps every approximation method x every thread count x kRepeats, and counts
 // how often the contour set diverges from that method's own 1-thread reference.
+//
+// LOOP ORDER MATTERS -- do not "tidy" this back to method-outermost.
+// cv::setNumThreads() is not cheap on the PPL backend: whenever the count
+// changes, parallel.cpp:762-767 DESTROYS and RECREATES the global scheduler,
+// releasing n-1 virtual processors and spinning up n-1 new ones. An earlier
+// version of this function looped
+//     for method { compute reference; for repeat { for threadCount { ... } } }
+// which changed the thread count on every single iteration: 764 scheduler
+// create/destroy cycles per backend, each churning up to 37 virtual processors
+// on a 4-vCPU runner. That completed once in ~35s and then HUNG for over an hour
+// on the next CI run -- an intermittent deadlock in scheduler teardown under
+// that pressure.
+//
+// So: hoist the thread count to the OUTERMOST loop and compute all references up
+// front inside one single-threaded scope. Same 760 comparisons, but ~39
+// setNumThreads calls per backend instead of 764 -- a ~20x reduction in churn.
 static BackendResult measureDivergence(const Mat& img)
 {
     BackendResult r;
     const std::vector<int> threadCounts = threadCountsToProbe();
+    const size_t nMethods = sizeof(kMethods) / sizeof(kMethods[0]);
 
-    for (size_t mi = 0; mi < sizeof(kMethods) / sizeof(kMethods[0]); ++mi)
+    // All references first, in ONE single-threaded scope. setNumThreads(1) makes
+    // parallel_for_ skip dispatch entirely (parallel.cpp:551 gate) for any
+    // backend, so these are genuinely serial and backend-independent. One
+    // reference per method, since each method legitimately yields different
+    // contours.
+    std::vector<std::vector<ContourSignature> > refSig(nMethods);
     {
-        const ContourApproximationModes method = kMethods[mi];
-
-        // setNumThreads(1) makes parallel_for_ take the serial path outright
-        // (parallel.cpp:551 gate), for any backend -- so the reference is
-        // genuinely single-threaded and backend-independent. One reference per
-        // method, since each method legitimately yields different contours.
-        std::vector<ContourSignature> refSig;
+        ScopedNumThreads one(1);
+        for (size_t mi = 0; mi < nMethods; ++mi)
         {
-            ScopedNumThreads one(1);
             std::vector<std::vector<Point> > refContours;
-            findContours(img, refContours, RETR_LIST, method);
-            refSig = signatureOf(refContours);
+            findContours(img, refContours, RETR_LIST, kMethods[mi]);
+            refSig[mi] = signatureOf(refContours);
         }
+    }
 
-        for (int rep = 0; rep < kRepeats; ++rep)
+    for (size_t ti = 0; ti < threadCounts.size(); ++ti)
+    {
+        const int t = threadCounts[ti];
+        ScopedNumThreads nt(t);          // <-- one scheduler change per thread count
+
+        for (size_t mi = 0; mi < nMethods; ++mi)
         {
-            for (size_t ti = 0; ti < threadCounts.size(); ++ti)
-            {
-                const int t = threadCounts[ti];
-                ScopedNumThreads nt(t);
+            const ContourApproximationModes method = kMethods[mi];
 
+            for (int rep = 0; rep < kRepeats; ++rep)
+            {
                 std::vector<std::vector<Point> > contours;
                 findContours(img, contours, RETR_LIST, method);
                 const std::vector<ContourSignature> sig = signatureOf(contours);
 
                 ++r.comparisons;
-                const SetDiff d = diffContourSets(refSig, sig);
+                const SetDiff d = diffContourSets(refSig[mi], sig);
                 if (!d.equal())
                 {
                     ++r.mismatches;
@@ -502,11 +523,19 @@ static BackendResult measureDivergence(const Mat& img)
                             "method=%d nthreads=%d repeat=%d: %d missing, %d extra "
                             "(%d contours vs %d reference)",
                             (int)method, t, rep, d.missing, d.extra,
-                            (int)sig.size(), (int)refSig.size()));
+                            (int)sig.size(), (int)refSig[mi].size()));
                     }
                 }
             }
         }
+
+        // Progress output, flushed per thread count. Without this the step looks
+        // hung for its entire duration -- the previous version printed nothing
+        // between the "[A] built-in backend" header and the final result, which
+        // made a real hang indistinguishable from slow progress.
+        std::cout << "    nthreads=" << t << " done ("
+                  << r.comparisons << " comparisons, "
+                  << r.mismatches << " diverged so far)" << std::endl;
     }
     return r;
 }
