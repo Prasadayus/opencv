@@ -140,18 +140,11 @@ public:
     // Accumulator: Vector of (Vector of Contours), where Contour is Vector of Points
     using AccumulatorType = std::vector<AccumulatorT>;
 
-    // labels/stats come from cv::connectedComponentsWithStats(img, ...): labels
-    // is a CV_32S map the same size as img (0 = background, 1..numLabels-1 =
-    // unique component ids), stats is the Nx5 CV_32S per-label bounding-box
-    // table it also produces. See operator() for why partitioning work by
-    // label -- instead of by row -- makes every stripe's pixel set provably
-    // disjoint from every other's, with no bound or lock required.
     TRUCOntourTracer(const cv::Mat& img,
-                     const cv::Mat& labels,
-                     const cv::Mat& stats,
+                     const std::vector<cv::Range>& stripRanges,
                      AccumulatorType& accumulator,
                      size_t minSize)
-        : padded_(img), labels_(labels), stats_(stats), accumulator_(accumulator), minSize_(minSize)
+        : padded_(img), ranges_(stripRanges), accumulator_(accumulator), minSize_(minSize)
     {
         step_ = padded_.step;
         int istep = (int)step_;
@@ -176,11 +169,56 @@ public:
 
     }
 
-    // No stripe-boundary "mock" pass anymore: since a trace can never leave its
-    // own label's pixels (see operator()), every row gets a full, real external
-    // trace directly. traceExternalContourMock existed only to support the old
-    // row-stripe boundary handling and is no longer needed.
-    bool traceContour( TRUCOPagedContour<4096>* buffer,  int r,int c,uchar *row_ptr, bool isExternal)const{
+    //trace external contour marking EAST pixels (VISITED_OUTER_RIGHT) only so that later the analysis of the internal contour is exactly as expected
+    void traceExternalContourMock(  int r,int c,uchar *row_ptr, const cv::Range& rowRange)const{
+        int curr_x = c , curr_y = r;
+        int start_dir = -1 ;
+        int search_idx = 5;
+        uchar* curr_ptr = row_ptr + c , * start_ptr = curr_ptr;
+        int dir=-1;
+        bool is_first_move = true;
+        // 3. TRACING LOOP
+        while(true)
+        {
+            // Check neighbors
+            for (int n = 0; n < 8; ++n)
+            {
+                int idx = search_idx + n;
+                // Use offset cache
+                uchar* neighbor = curr_ptr + offsets_[idx];
+                if (*neighbor == BACKGROUND) continue;
+                dir = idx & 7;
+                if (((search_idx <= 1)  || (dir <= search_idx - 2)) && (curr_x!=c && curr_y!=r))//do nt apply to first pixel in the way back
+                    *curr_ptr = VISITED_OUTER_RIGHT;
+                // --- EXECUTE MOVE ---
+                curr_y += dy_[dir];
+                curr_x += dx_[dir];
+                // Check bounds //we need to move out of the range  //if first line, and internal contour, we let it go, but no further from this line
+                if( curr_y < rowRange.start )
+                    return  ;
+                // Short-circuit Jacob's Check
+                if (curr_ptr == start_ptr) {
+                    if (!is_first_move && dir == start_dir) {
+                        return  ;//done
+                    }
+                }
+                curr_ptr = neighbor;//move ptr
+                // Reset search index for Moore neighbor
+                search_idx = (dir +6) & 7;
+                break;
+
+            }
+            if (is_first_move) {
+                if(dir==-1){//single pixel
+                    break;//not moved
+                }
+                start_dir = dir;
+                is_first_move = false;
+            }
+
+        }
+    }
+    bool traceContour( TRUCOPagedContour<4096>* buffer,  int r,int c,uchar *row_ptr, const cv::Range& rowRange,bool isExternal)const{
 
         buffer->clear();
 
@@ -223,11 +261,11 @@ public:
                 curr_y += dy_[dir];
                 curr_x += dx_[dir];
 
-                // No range bound needed here: every 8-connected foreground
-                // neighbor a trace can step to is, by definition of connected
-                // components, part of the same label as the pixel it started
-                // from -- so this walk can never leave the pixels this thread
-                // exclusively owns (see operator()).
+
+                // Check bounds //we need to move out of the range  //if first line, and internal contour, we let it go, but no further from this line
+                if( curr_y < rowRange.start ){
+                    return false;
+                }
                 if ((search_idx <= 1)  || (dir <= search_idx - 2))
                 {
                     *curr_ptr = VISITED_OUTER_RIGHT;
@@ -264,83 +302,75 @@ public:
         return true;
     }
 
-    // Processes one row, but only the pixels on it that belong to myLabel.
-    // Any foreground run whose label doesn't match is skipped outright (it
-    // belongs to some other label, which some other call -- possibly running
-    // concurrently -- owns exclusively). Since a trace starting on myLabel's
-    // pixels can never step onto a different label's pixels (8-connected
-    // foreground pixels always share a label, by definition of connected
-    // components), this is safe to call concurrently for different labels
-    // with no lock, and needs no row-range bound at all.
-    void processRow(int r, int myLabel, TRUCOPagedContour<4096>* buffer, AccumulatorT& local_contours) const
+    void operator()(const cv::Range& range) const CV_OVERRIDE
     {
-        int cols = padded_.cols;
-        uchar* row_ptr = padded_.data + r * step_;
-        const int* label_row = labels_.ptr<int>(r);
-
-        // "c" is updated by the find* functions
-        for (int c = 1; c < cols - 1; )
-        {
-            // 1. FAST SCAN: Skip background pixels
-            if ((c = findStartContourPoint(row_ptr, cols, c)) == cols) break;
-
-            // 2. CHECK: only trace if this run is actually foreground and is
-            // this thread's own label -- otherwise it belongs to a different
-            // component and is left untouched for whoever owns it.
-            if (row_ptr[c] == FOREGROUND && label_row[c] == myLabel)
-            {
-                if( traceContour(buffer,r,c,row_ptr,true)){
-                    // Post-processing
-                    if (buffer->size() > 1 && buffer->back() == buffer->front()) {
-                        buffer->pop_back();
-                    }
-                    if (buffer->size() >= minSize_) {
-                        // Instead of copying the vector, we move it.
-                        local_contours.emplace_back();
-                        buffer->copyTo(local_contours.back());
-                    }
-                }
-            }
-
-            // 3. FAST SCAN: Find end of current component to skip processing it again
-            c = findEndContourPoint(row_ptr, cols, c + 1);
-            if(c>=cols)break;//end of row
-            //internal contour -- same label-ownership guard as above
-            if(label_row[c-1]==myLabel && row_ptr[c-1]>VISITED_OUTER_RIGHT){
-
-                if(traceContour(buffer,r,c-1,row_ptr,false)){
-                    // Post-processing
-                    if (buffer->size() > 1 && buffer->back() == buffer->front()) {
-                        buffer->pop_back();
-                    }
-                    if (buffer->size() >= minSize_) {
-                        local_contours.emplace_back();
-                        buffer->copyTo(local_contours.back());
-                    }
-                }
-            }
-        }
-    }
-
-    // One call per label range via cv::parallel_for_. Each label's full
-    // contour set (its external boundary plus any internal holes) is traced
-    // entirely by whichever thread handles it, top to bottom, in the same
-    // natural row order a single-threaded scan would use -- there's no
-    // cross-thread boundary left to reconcile afterward, because connected
-    // components already guarantees no two labels' pixels ever overlap.
-    void operator()(const cv::Range& labelRange) const CV_OVERRIDE
-    {
+        // Pre-allocate buffer to avoid re-allocation during moves
         TRUCOPagedContour<4096> buffer;
 
-        for (int label = labelRange.start; label < labelRange.end; ++label)
-        {
-            auto& local_contours = accumulator_[label];
-            local_contours.reserve(64);
+        int cols = padded_.cols;
 
-            const int top    = stats_.at<int>(label, cv::CC_STAT_TOP);
-            const int height = stats_.at<int>(label, cv::CC_STAT_HEIGHT);
-            for (int r = top; r < top + height; ++r)
-                processRow(r, label, &buffer, local_contours);
+        for (int i = range.start; i < range.end; ++i)
+        {
+            const cv::Range& rowRange = ranges_[i];
+            auto& local_contours = accumulator_[i];
+
+            // Hint for result vector size
+            local_contours.reserve(2048);
+
+            for (int r = rowRange.start; r <= rowRange.end; ++r)
+            {
+                uchar* row_ptr = padded_.data + r * step_;
+
+                // "c" is updated by the find* functions
+                for (int c = 1; c < cols - 1; )
+                {
+                    // 1. FAST SCAN: Skip background pixels
+                    if ((c = findStartContourPoint(row_ptr, cols, c)) == cols) break;
+
+                    // 2. CHECK: Only process if actually FOREGROUND (redundancy check)
+                    if (row_ptr[c] == FOREGROUND && r<rowRange.end )
+                    {
+                        if( traceContour(&buffer,r,c,row_ptr,rowRange,true)){
+                            // Post-processing
+                            if (buffer.size() > 1 && buffer.back() == buffer.front()) {
+                                buffer.pop_back();
+                            }
+                            if (buffer.size() >= minSize_) {
+                                // Instead of copying the vector, we move it.
+                                local_contours.emplace_back();
+                                buffer.copyTo(local_contours.back());
+                                if( r==rowRange.start){//register this so we can zip them as Suzuki&Abe method
+                                    local_contours.idx_external_firstLine.push_back((int)(local_contours.size()-1) );
+                                }
+                            }
+                        }
+                    }
+                    else if( row_ptr[c] == FOREGROUND && r==rowRange.end ){//extra step to mark east pixels only so that internal contours can be correctly extracted in this line
+                        traceExternalContourMock(r,c,row_ptr,rowRange);
+                    }
+
+                    // 3. FAST SCAN: Find end of current component to skip processing it again
+                    c = findEndContourPoint(row_ptr, cols, c + 1);
+                    if(c>=cols)break;//end of row
+                    //internal contour
+                    if(row_ptr[c-1]>VISITED_OUTER_RIGHT && r>rowRange.start){//inner contours of first line are handled by the thread above
+
+                        if(traceContour(&buffer,r,c-1,row_ptr,rowRange,false)){
+                            // Post-processing
+                            if (buffer.size() > 1 && buffer.back() == buffer.front()) {
+                                buffer.pop_back();
+                            }
+                            if (buffer.size() >= minSize_) {
+                                local_contours.emplace_back();
+                                buffer.copyTo(local_contours.back());
+                                if( r==rowRange.end){//register this so we can zip them as Suzuki&Abe method
+                                    local_contours.idx_internal_lastLine.push_back((int)(local_contours.size() -1));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -393,8 +423,7 @@ public:
 
 private:
     cv::Mat padded_;
-    const cv::Mat& labels_;
-    const cv::Mat& stats_;
+    const std::vector<cv::Range>& ranges_;
     AccumulatorType& accumulator_;
     size_t minSize_;
     size_t step_;
@@ -475,45 +504,94 @@ void findTRUContoursImpl(cv::Mat& padded,
                            std::vector<std::vector<cv::Point>>& outContours,
                            int minSize,int contApprox)
 {
-    // Pass 1: label connected components with OpenCV's own proven, already-
-    // parallel implementation (modules/imgproc/src/connectedcomponents.cpp).
-    // This guarantees every 8-connected foreground component gets a unique,
-    // immutable label before any tracing starts. Partitioning the tracing
-    // work by label instead of by row range then gives each thread pixels no
-    // other thread will ever touch -- guaranteed by the definition of
-    // connected components, not by any lock or bound this file adds.
-    // CCL_SAUF specifically forces row-major label ordering (unlike the
-    // default Spaghetti algorithm) -- so label 1 is whichever component is
-    // encountered first scanning top-to-bottom, left-to-right, same as a
-    // classic raster-scan contour algorithm would find it. Since output
-    // order below follows label order, this keeps findContours' output
-    // ordering close to what callers relying on raster-scan discovery order
-    // (e.g. classic Suzuki-Abe) already expect.
-    cv::Mat labels, stats, centroids;
-    int numLabels = cv::connectedComponentsWithStats(padded, labels, stats, centroids, 8, CV_32S, cv::CCL_SAUF);
-    outContours.clear();
-    if (numLabels <= 1) return; // no foreground pixels at all (only the background label exists)
+    //   Load Balancing Logic
+    const int nstripes = cv::getNumThreads();
+    std::vector<cv::Range> balancedRanges;
+    if (nstripes > 1) {
+        int rowsPerStripe = (padded.rows - 2) / nstripes;
+        int remainingRows = (padded.rows - 2) % nstripes;
+        int currentRow = 1;
+        for (int t = 0; t < nstripes; ++t) {
+            int startRow = currentRow;
+            int endRow = startRow + rowsPerStripe + (t < remainingRows ? 1 : 0);
+            balancedRanges.emplace_back(startRow, endRow);
+            currentRow = endRow;
+        }
+    }
+    else {
+        balancedRanges.emplace_back(1, padded.rows - 1);
+    }
+    //  Parallel Execution
+    std::vector<AccumulatorT> threadAccumulators(balancedRanges.size());
+    TRUCOntourTracer worker(padded, balancedRanges, threadAccumulators, minSize);
+    cv::parallel_for_(cv::Range(0, (int)balancedRanges.size()), worker);
 
-    // Pass 2: parallel, one call per label range. Each label's complete
-    // contour set (external boundary plus any internal holes) is traced
-    // entirely by whichever thread handles it -- no merge step needed
-    // afterward, since there's no stripe boundary left to reconcile.
-    std::vector<AccumulatorT> perLabelContours(numLabels); // index 0 (background) unused
-    TRUCOntourTracer worker(padded, labels, stats, perLabelContours, minSize);
-    cv::parallel_for_(cv::Range(1, numLabels), worker);
 
+    // REORG To Match Suzuki & Abe's Contour Ordering.
+    // Every adjacent strip pair (t, t+1) shares a boundary row. On that row:
+    //   * thread t   recorded INTERNAL fragments -> idx_internal_lastLine (tail of accT)
+    //   * thread t+1 recorded EXTERNAL fragments -> idx_external_firstLine (head of accT1)
+    // Both runs are already in X-ascending order (left-to-right raster scan),
+    // so a two-pointer merge restores the sequential Suzuki & Abe ordering.
+    for (size_t t = 0; t + 1 < threadAccumulators.size(); ++t) {
+        auto& accT  = threadAccumulators[t];
+        auto& accT1 = threadAccumulators[t + 1];
+
+        const size_t kI = accT.idx_internal_lastLine.size();
+        const size_t kE = accT1.idx_external_firstLine.size();
+        if (kI == 0 && kE == 0) continue;
+
+        const size_t tailStart = accT.size() - kI;
+
+        // Merge by ascending X of each contour's first point. Contours are moved,
+        // not copied — only std::vector handles (three pointers) change hands.
+        std::vector<std::vector<cv::Point>> merged;
+        merged.reserve(kI + kE);
+        size_t i = tailStart, iEnd = accT.size();
+        size_t j = 0,         jEnd = kE;
+        while (i < iEnd && j < jEnd) {
+            if (accT[i].front().x <= accT1[j].front().x)
+                merged.emplace_back(std::move(accT[i++]));
+            else
+                merged.emplace_back(std::move(accT1[j++]));
+        }
+        while (i < iEnd) merged.emplace_back(std::move(accT[i++]));
+        while (j < jEnd) merged.emplace_back(std::move(accT1[j++]));
+
+        // Replace accT's tail with the merged run.
+        accT.resize(tailStart);
+        for (auto& c : merged) accT.emplace_back(std::move(c));
+
+        // Drop the consumed externals from the head of accT1.
+        accT1.erase(accT1.begin(), accT1.begin() + kE);
+
+        // Any remaining bookkeeping in accT1 indexed absolute positions — fix them.
+        for (auto& idx : accT1.idx_internal_lastLine)
+            idx -= static_cast<int>(kE);
+
+        // This boundary's bookkeeping is now consumed.
+        accT.idx_internal_lastLine.clear();
+        accT1.idx_external_firstLine.clear();
+    }
+
+    //   ZERO-COPY MERGE
     size_t totalContours = 0;
-    for (auto& lVec : perLabelContours)
-        totalContours += lVec.size();
+    for (auto& tVec : threadAccumulators)
+        totalContours += tVec.size();
 
+
+    outContours.clear();
     outContours.reserve(totalContours);
-    // move the contours from per-label accumulators to output without copying pixel data
-    for (auto& lVec : perLabelContours) {
+    // move the contours from thread accumulators to output without copying pixel data
+    for (auto& tVec : threadAccumulators) {
         // move_iterator moves the vector internals (pointers) without copying pixel data
         outContours.insert(outContours.end(),
-                           std::make_move_iterator(lVec.begin()),
-                           std::make_move_iterator(lVec.end()));
+                           std::make_move_iterator(tVec.begin()),
+                           std::make_move_iterator(tVec.end()));
     }
+    //  reverse the order to match original findContours Suzuki&Abe
+    std::reverse(outContours.begin(), outContours.end());
+
 
     //7. now, lets do the contour approximation if needed in parallel
     if(contApprox!=cv::CHAIN_APPROX_NONE){

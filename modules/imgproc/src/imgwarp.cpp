@@ -55,7 +55,6 @@
 #include "opencv2/core/hal/intrin.hpp"
 #include "opencv2/core/softfloat.hpp"
 #include "imgwarp.hpp"
-#include <mutex>
 
 #include "imgwarp.simd.hpp"
 #include "imgwarp.simd_declarations.hpp" // defines CV_CPU_DISPATCH_MODES_ALL=AVX512_ICL,...,BASELINE based on CMakeLists.txt content
@@ -156,17 +155,7 @@ static void initInterTab1D(int method, float* tab, int tabsz)
 
 static const void* initInterTab2D( int method, bool fixpt )
 {
-    // One std::once_flag per interpolation method. std::call_once gives a
-    // real happens-before guarantee: whichever thread runs the fill lambda,
-    // every thread's call_once (including the one that ran it) only returns
-    // once it has fully completed, and any thread that arrives while another
-    // is already filling blocks until that fill is done rather than racing
-    // into the same tables concurrently or reading them half-written. The
-    // previous plain `if (!inittab[method])` check had neither guarantee --
-    // relying instead on eager pre-warming at static-init time, which is
-    // itself disabled on MinGW builds (see initAllInterTab2D below), leaving
-    // the race fully exposed there on first real (possibly concurrent) use.
-    static std::once_flag onceFlags[INTER_MAX+1];
+    static bool inittab[INTER_MAX+1] = {false};
     float* tab = 0;
     short* itab = 0;
     int ksize = 0;
@@ -179,7 +168,7 @@ static const void* initInterTab2D( int method, bool fixpt )
     else
         CV_Error( cv::Error::StsBadArg, "Unknown/unsupported interpolation type" );
 
-    std::call_once(onceFlags[method], [&]()
+    if( !inittab[method] )
     {
         AutoBuffer<float> _tab(8*INTER_TAB_SIZE);
         int i, j, k1, k2;
@@ -235,7 +224,8 @@ static const void* initInterTab2D( int method, bool fixpt )
                 }
         }
 #endif
-    });
+        inittab[method] = true;
+    }
     return fixpt ? (const void*)itab : (const void*)tab;
 }
 
