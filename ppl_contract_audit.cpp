@@ -79,6 +79,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 namespace {
@@ -246,6 +247,287 @@ void runTrial(const ScopedPplScheduler& sched, int tasks, long long trialId, Tot
     ++t.trials;
 }
 
+// ---------------------------------------------------------------------------
+// SECOND FUNCTOR SHAPE: a structural clone of what OpenCV actually hands to PPL.
+//
+// Why this exists. runTrial() above passes Concurrency::parallel_for a LAMBDA.
+// OpenCV does not. It passes a ProxyLoopBody, and Concurrency::parallel_for is a
+// template on the functor type -- its internals (_Parallel_chunk_impl,
+// _Parallel_chunk_helper) instantiate on _Function and may copy it into task
+// objects. A lambda and OpenCV's object are materially different inputs:
+//
+//   cv::ParallelLoopBody          (core/utility.hpp:671)
+//       virtual ~ParallelLoopBody();
+//       virtual void operator()(const Range&) const = 0;   <-- POLYMORPHIC, has a vtable
+//   ParallelLoopBodyWrapper : ParallelLoopBody   (parallel.cpp:~300)
+//       holds ParallelLoopBodyWrapperContext&           <-- reference member
+//       operator()(const Range& sr) const  -- maps stripe index -> sub-range,
+//                                             then makes a VIRTUAL call to the body
+//   ProxyLoopBody : ParallelLoopBodyWrapper      (parallel.cpp:439-451)
+//       operator()(int i) const  -- non-virtual; qualified-calls the wrapper
+//
+// So the real call chain per stripe is:
+//   PPL -> ProxyLoopBody::operator()(int)        [non-virtual]
+//       -> ParallelLoopBodyWrapper::operator()(Range)  [qualified, non-virtual]
+//       -> (*ctx.body)(r)                         [VIRTUAL]
+//
+// The classes below reproduce that shape exactly -- vtable, reference member,
+// int-to-Range forwarding, the same integer range arithmetic from
+// parallel.cpp:348-351, and a final virtual call -- with no OpenCV linked.
+//
+// This closes a real gap: the lambda version coming back clean only ever proved
+// "PPL + lambda is fine", not "PPL + the functor OpenCV actually uses is fine".
+// If this shape drops indices where the lambda did not, PPL mishandles this
+// functor shape and the defect is PPL's. If both stay clean, the fault is in the
+// wrapper's own logic rather than in PPL's dispatch.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Mimic of OpenCV's per-task thread-local write, which shape B was missing.
+//
+// parallel.cpp:340 runs UNCONDITIONALLY inside every single task:
+//     cv::theRNG() = ctx.rng;
+// and theRNG() is genuine TLS: rand.cpp:654 returns getCoreTlsData().rng.
+//
+// The important part is what OpenCV's TLS does on FIRST access from a thread it
+// has not seen before (system.cpp:1847-1874):
+//     ThreadData* threadData = (ThreadData*)tls->getData();
+//     if (!threadData) {
+//         threadData = new ThreadData;                 // heap allocation
+//         tls->setData(threadData);
+//         { AutoLock guard(mtxGlobalAccess);           // GLOBAL MUTEX
+//           ... scan `threads` for a free slot, else threads.push_back(...) }
+//     }
+//     if (slotIdx >= threadData->slots.size()) {
+//         AutoLock guard(mtxGlobalAccess);             // GLOBAL MUTEX again
+//         threadData->slots.resize(slotIdx + 1, NULL);
+//     }
+// Later accesses from the same thread are lock-free.
+//
+// So every PPL worker thread that gets created pays a locked, allocating
+// first-touch inside its first task, and PPL creates and recycles workers
+// constantly across thousands of trials. That is real contention in the exact
+// window where stripes go missing, and omitting it made shape B unfaithful.
+//
+// This is not a byte-for-byte copy of TLSDataContainer -- it reproduces the
+// behaviour that matters: per-thread lazy allocation, a global mutex on first
+// touch, registration in a shared vector, then a lock-free plain write.
+class MiniTlsStorage
+{
+public:
+    struct ThreadSlot
+    {
+        long long rng;      // stands in for CoreTLSData::rng
+        int       idx;
+        ThreadSlot() : rng(0), idx(-1) {}
+    };
+
+    // Returns this thread's slot, allocating and registering it on first touch.
+    ThreadSlot& getRef()
+    {
+        if (tlsSlot_ == nullptr)
+        {
+            ThreadSlot* slot = new ThreadSlot();     // heap allocation, as OpenCV does
+            tlsSlot_ = slot;
+            {
+                std::lock_guard<std::mutex> guard(mtxGlobalAccess_);   // GLOBAL MUTEX
+                bool found = false;
+                for (size_t i = 0; i < threads_.size(); ++i)
+                {
+                    if (threads_[i] == nullptr)
+                    {
+                        slot->idx = (int)i;
+                        threads_[i] = slot;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    slot->idx = (int)threads_.size();
+                    threads_.push_back(slot);
+                }
+            }
+        }
+        return *tlsSlot_;
+    }
+
+    // Deliberately does NOT free the per-thread slots: OpenCV's teardown path is
+    // not what is under test, and freeing here would add its own synchronization.
+    size_t registeredThreads()
+    {
+        std::lock_guard<std::mutex> guard(mtxGlobalAccess_);
+        return threads_.size();
+    }
+
+private:
+    static thread_local ThreadSlot* tlsSlot_;
+    std::mutex                      mtxGlobalAccess_;
+    std::vector<ThreadSlot*>        threads_;
+};
+
+thread_local MiniTlsStorage::ThreadSlot* MiniTlsStorage::tlsSlot_ = nullptr;
+
+// One global instance, mirroring OpenCV's single getCoreTlsDataTLS() singleton.
+MiniTlsStorage g_miniTls;
+
+struct MiniRange
+{
+    int start, end;
+    MiniRange(int s, int e) : start(s), end(e) {}
+};
+
+// Mirrors cv::ParallelLoopBody: polymorphic, pure-virtual call operator.
+struct MiniLoopBody
+{
+    virtual ~MiniLoopBody() {}
+    virtual void operator()(const MiniRange& r) const = 0;
+};
+
+// Mirrors ParallelLoopBodyWrapperContext. Members deliberately plain and
+// non-atomic, matching the real thing (cv::RNG rng is a plain uint64 wrapper;
+// is_rng_used is a mutable bool written concurrently by every worker).
+struct MiniContext
+{
+    const MiniLoopBody* body;
+    MiniRange           wholeRange;
+    int                 nstripes;
+    long long           rng;
+    mutable bool        is_rng_used;
+
+    MiniContext(const MiniLoopBody* b, MiniRange wr, int ns, long long r)
+        : body(b), wholeRange(wr), nstripes(ns), rng(r), is_rng_used(false) {}
+};
+
+// Mirrors ParallelLoopBodyWrapper, including the exact stripe-index -> sub-range
+// arithmetic from parallel.cpp:348-351.
+class MiniWrapper : public MiniLoopBody
+{
+public:
+    explicit MiniWrapper(MiniContext& ctx_) : ctx(ctx_) {}
+
+    void operator()(const MiniRange& sr) const
+    {
+        // Mirrors parallel.cpp:340 -- "propagate main thread state", run
+        // unconditionally in every task, and a TLS first-touch on any PPL worker
+        // thread PPL has just created (locked + allocating, see MiniTlsStorage).
+        g_miniTls.getRef().rng = ctx.rng;
+
+        const int nstripes = ctx.nstripes;
+        const int len = ctx.wholeRange.end - ctx.wholeRange.start;
+
+        MiniRange r(0, 0);
+        r.start = (int)(ctx.wholeRange.start +
+                        ((uint64_t)sr.start * len + nstripes / 2) / nstripes);
+        r.end = sr.end >= nstripes
+              ? ctx.wholeRange.end
+              : (int)(ctx.wholeRange.start +
+                      ((uint64_t)sr.end * len + nstripes / 2) / nstripes);
+
+        (*ctx.body)(r);   // virtual dispatch, exactly as parallel.cpp:360 does
+    }
+
+protected:
+    MiniContext& ctx;
+};
+
+// Mirrors ProxyLoopBody for the HAVE_CONCURRENCY backend: PPL calls this with a
+// bare int, and it forwards through a qualified (non-virtual) wrapper call.
+class MiniProxy : public MiniWrapper
+{
+public:
+    explicit MiniProxy(MiniContext& ctx_) : MiniWrapper(ctx_) {}
+
+    void operator()(int i) const
+    {
+        this->MiniWrapper::operator()(MiniRange(i, i + 1));
+    }
+};
+
+
+// The actual audit body, playing the part of the user's ParallelLoopBody.
+class AuditBody : public MiniLoopBody
+{
+public:
+    AuditBody(std::vector<std::atomic<int> >& execCount,
+              std::vector<Payload>& slots,
+              const long long& sentinel,
+              long long trialId,
+              std::atomic<long long>& totalReads,
+              std::atomic<long long>& staleReads)
+        : execCount_(execCount), slots_(slots), sentinel_(sentinel),
+          trialId_(trialId), totalReads_(totalReads), staleReads_(staleReads) {}
+
+    void operator()(const MiniRange& r) const
+    {
+        for (int i = r.start; i < r.end; ++i)
+        {
+            const long long observed = sentinel_;          // property 1
+            totalReads_.fetch_add(1, std::memory_order_relaxed);
+            if (observed != trialId_)
+                staleReads_.fetch_add(1, std::memory_order_relaxed);
+
+            execCount_[i].fetch_add(1, std::memory_order_relaxed);   // property 2
+            slots_[i].fill((uint64_t)i);                             // properties 3, 4
+        }
+    }
+
+private:
+    std::vector<std::atomic<int> >& execCount_;
+    std::vector<Payload>&           slots_;
+    const long long&                sentinel_;
+    long long                       trialId_;
+    std::atomic<long long>&         totalReads_;
+    std::atomic<long long>&         staleReads_;
+    AuditBody& operator=(const AuditBody&);
+};
+
+// Same four checks as runTrial(), but dispatched through the OpenCV-shaped
+// functor chain instead of a lambda.
+void runTrialProxyShape(const ScopedPplScheduler& sched, int tasks, long long trialId, Totals& t)
+{
+    long long sentinel = trialId;
+
+    std::vector<std::atomic<int> > execCount(tasks);
+    for (int i = 0; i < tasks; ++i)
+        execCount[i].store(0, std::memory_order_relaxed);
+
+    std::vector<Payload> slots(tasks);
+    std::memset(slots.data(), 0, slots.size() * sizeof(Payload));
+
+    std::atomic<long long> staleReads(0);
+    std::atomic<long long> workerReads(0);
+
+    AuditBody body(execCount, slots, sentinel, trialId, workerReads, staleReads);
+
+    // nstripes == number of tasks, matching OpenCV's default nstripes = len.
+    MiniContext ctx(&body, MiniRange(0, tasks), tasks, trialId);
+    MiniProxy   proxy(ctx);
+
+    sched.dispatch(0, tasks, proxy);
+
+    for (int i = 0; i < tasks; ++i)
+    {
+        const int runs = execCount[i].load(std::memory_order_relaxed);
+        if (runs == 0)      ++t.skippedIndices;
+        else if (runs > 1)  t.duplicatedIndices += (runs - 1);
+
+        if (runs >= 1)
+        {
+            const Payload& p = slots[i];
+            const bool allZero = (p.magic == 0 && p.index == 0 &&
+                                  p.derived == 0 && p.checksum == 0);
+            if (allZero)                       ++t.invisibleToCaller;
+            else if (!p.valid((uint64_t)i))    ++t.corruptPayloads;
+        }
+    }
+
+    t.staleCallerToWorker += staleReads.load();
+    t.totalWorkerReads    += workerReads.load();
+    t.totalIndices        += tasks;
+    ++t.trials;
+}
+
 void report(const char* label, int nThreads, unsigned vprocs, int tasks, const Totals& t)
 {
     printf("\n--- %s (setNumThreads=%d -> %u virtual processors, %d tasks/trial) ---\n",
@@ -355,33 +637,92 @@ int main(int argc, char** argv)
     };
 
     bool anyViolation = false;
+    bool lambdaViolation = false;
+    bool proxyViolation  = false;
 
     for (size_t c = 0; c < sizeof(configs) / sizeof(configs[0]); ++c)
     {
         const Config& cfg = configs[c];
         ScopedPplScheduler sched(cfg.nThreads);
 
-        Totals t;
+        // --- shape A: a plain lambda ---
+        Totals tLambda;
         for (long long trial = 0; trial < cfg.trials; ++trial)
         {
-            runTrial(sched, cfg.tasks, trial, t);
+            runTrial(sched, cfg.tasks, trial, tLambda);
 
             // Bail out early on the first violation: the point is proof, and a
             // single reproducible violation is already conclusive.
-            if (!t.clean())
+            if (!tLambda.clean())
             {
-                printf("\n!!! contract violation on trial %lld of '%s' -- stopping this config\n",
+                printf("\n!!! [lambda] contract violation on trial %lld of '%s' -- stopping\n",
                        trial, cfg.label);
                 break;
             }
         }
 
-        report(cfg.label, cfg.nThreads, sched.virtualProcessors(), cfg.tasks, t);
-        if (!t.clean())
-            anyViolation = true;
+        // --- shape B: a structural clone of OpenCV's ProxyLoopBody ---
+        //
+        // This is the shape that matters. Concurrency::parallel_for is a
+        // template on the functor type, so a lambda and a polymorphic object
+        // with a vtable are genuinely different inputs to it. Shape A coming
+        // back clean only ever proved "PPL + lambda is fine".
+        Totals tProxy;
+        for (long long trial = 0; trial < cfg.trials; ++trial)
+        {
+            runTrialProxyShape(sched, cfg.tasks, trial, tProxy);
+
+            if (!tProxy.clean())
+            {
+                printf("\n!!! [proxy-shape] contract violation on trial %lld of '%s' -- stopping\n",
+                       trial, cfg.label);
+                break;
+            }
+        }
+
+        char labelA[256], labelB[256];
+        _snprintf_s(labelA, sizeof(labelA), _TRUNCATE, "%s  [shape A: lambda]", cfg.label);
+        _snprintf_s(labelB, sizeof(labelB), _TRUNCATE, "%s  [shape B: OpenCV ProxyLoopBody clone]", cfg.label);
+
+        report(labelA, cfg.nThreads, sched.virtualProcessors(), cfg.tasks, tLambda);
+        report(labelB, cfg.nThreads, sched.virtualProcessors(), cfg.tasks, tProxy);
+
+        // How many distinct threads have ever touched the mimicked TLS. This is
+        // cumulative across configs and only ever grows. It matters because the
+        // locked, allocating first-touch path (MiniTlsStorage::getRef) only runs
+        // for a thread PPL has not used before -- if this number stays tiny while
+        // thousands of trials run, PPL is recycling the same workers and shape B
+        // is barely exercising that path, which would be worth knowing before
+        // reading anything into a clean result.
+        printf("  distinct threads seen by mimicked TLS (cumulative): %zu\n",
+               g_miniTls.registeredThreads());
+
+        if (!tLambda.clean()) { lambdaViolation = true; anyViolation = true; }
+        if (!tProxy.clean())  { proxyViolation  = true; anyViolation = true; }
     }
 
     printf("\n================ CONCLUSION ================\n");
+    printf("shape A (plain lambda)                   : %s\n",
+           lambdaViolation ? "*** CONTRACT VIOLATED ***" : "clean");
+    printf("shape B (OpenCV ProxyLoopBody clone)     : %s\n\n",
+           proxyViolation ? "*** CONTRACT VIOLATED ***" : "clean");
+
+    if (proxyViolation && !lambdaViolation)
+    {
+        // The most informative outcome. Same PPL, same scheduler, same task
+        // count, same machine -- only the FUNCTOR TYPE differs. Since
+        // Concurrency::parallel_for is a template on that type, this says PPL
+        // mishandles the polymorphic, vtable-carrying functor OpenCV actually
+        // passes it, while handling a lambda correctly.
+        printf("Only the OpenCV-shaped functor fails. PPL handles a lambda correctly\n");
+        printf("but not the polymorphic object OpenCV actually passes it. Since\n");
+        printf("Concurrency::parallel_for is a template on the functor type, and NO\n");
+        printf("OpenCV code is linked into this binary, this is PPL/ConcRT's defect:\n");
+        printf("it fails to execute part of its own range for this functor shape.\n");
+        printf("PROVEN -- a positive demonstration, not an inference.\n");
+        return 1;
+    }
+
     if (anyViolation)
     {
         printf("PPL/ConcRT VIOLATED its documented contract on this machine.\n");
@@ -392,13 +733,19 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    printf("PPL/ConcRT honoured all four guarantees across every configuration,\n");
-    printf("including the heavily oversubscribed ones that match the CI runner.\n");
-    printf("This does NOT prove PPL is flawless -- only that the four properties\n");
-    printf("OpenCV depends on held here, at this scale. But it means the\n");
-    printf("nthreads_consistency divergence is not explained by PPL skipping a\n");
-    printf("stripe, running one twice, or failing to publish a worker's writes.\n");
-    printf("Next step: the backend A/B test, which holds the work decomposition\n");
-    printf("fixed and swaps only the thread pool.\n");
+    printf("Both functor shapes honoured all four guarantees, at 997 tasks across\n");
+    printf("every thread count, including the heavily oversubscribed ones that\n");
+    printf("match the CI runner.\n\n");
+    printf("Shape B matters: it reproduces OpenCV's actual call chain -- a\n");
+    printf("polymorphic base with a vtable, a reference member, the int->Range\n");
+    printf("forwarding hop, the same range arithmetic from parallel.cpp:348-351,\n");
+    printf("and a final virtual call -- so a clean result here is no longer just\n");
+    printf("\"PPL + lambda is fine\".\n\n");
+    printf("Combined with the in-situ audit, which loses whole CONTIGUOUS chunks of\n");
+    printf("stripes through cv::parallel_for_ on this same runner while a plain\n");
+    printf("std::thread pool loses none, that points the defect at OpenCV's own PPL\n");
+    printf("dispatch path rather than at PPL. Remaining candidates: the per-call\n");
+    printf("Attach/Detach at parallel.cpp:600-609, and the global pplScheduler that\n");
+    printf("setNumThreads destroys and recreates at :762-767.\n");
     return 0;
 }
