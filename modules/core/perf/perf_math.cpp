@@ -450,6 +450,93 @@ INSTANTIATE_TEST_CASE_P(/*nothing*/ , KMeans,
     )
 );
 
+// ---------------------------------------------------------------------------
+// LOCAL ONLY - not for upstream.
+// SvdTest and SolveTest stop at n=100. At that size multi-threaded OpenBLAS is
+// never a win and DECOMP_LU is catastrophically slower, because the fork/join
+// cost dwarfs the arithmetic. These sizes are where threading should start to
+// pay, so this locates the crossover. Plain uniform random matrices (full rank
+// with probability 1) rather than buildRandomMat, to keep setup cheap at 1024.
+// ---------------------------------------------------------------------------
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth>> LargeFactorTest;
+
+PERF_TEST_P(LargeFactorTest, svdLarge, ::testing::Combine(
+    ::testing::Values(128, 256, 512, 1024),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    int n     = std::get<0>(GetParam());
+    int mtype = std::get<1>(GetParam());
+
+    Mat A(n, n, mtype);
+    theRNG().fill(A, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::SVD svd(A, 0);
+
+    SANITY_CHECK_NOTHING();
+}
+
+PERF_TEST_P(LargeFactorTest, solveLuLarge, ::testing::Combine(
+    ::testing::Values(128, 256, 512, 1024),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    int n     = std::get<0>(GetParam());
+    int mtype = std::get<1>(GetParam());
+
+    Mat A(n, n, mtype), b(n, 1, mtype), x;
+    theRNG().fill(A, RNG::UNIFORM, Scalar(-1), Scalar(1));
+    theRNG().fill(b, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::solve(A, b, x, DECOMP_LU);
+
+    SANITY_CHECK_NOTHING();
+}
+
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth, SolveDecompEnum>> InvertTest;
+
+PERF_TEST_P(InvertTest, invert, ::testing::Combine(
+    ::testing::Values(31, 64, 100, 256),
+    ::testing::Values(CV_32F, CV_64F),
+    ::testing::Values(DECOMP_LU, DECOMP_CHOLESKY, DECOMP_SVD, DECOMP_EIG)
+    ))
+{
+    auto t = GetParam();
+    int n      = std::get<0>(t);
+    int mtype  = std::get<1>(t);
+    int method = std::get<2>(t);
+
+    // CHOLESKY needs positive definite, EIG needs symmetric; u*s*u.t() gives both
+    bool symmetrical = (method == DECOMP_CHOLESKY || method == DECOMP_EIG);
+
+    RNG& rng = theRNG();
+    Mat A = buildRandomMat(n, n, mtype, rng, n, symmetrical);
+    Mat dst;
+
+    TEST_CYCLE() cv::invert(A, dst, method);
+
+    SANITY_CHECK_NOTHING();
+}
+
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth>> DeterminantTest;
+
+PERF_TEST_P(DeterminantTest, determinant, ::testing::Combine(
+    ::testing::Values(31, 64, 100, 256),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    int n     = std::get<0>(t);
+    int mtype = std::get<1>(t);
+
+    Mat A(n, n, mtype);
+    theRNG().fill(A, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::determinant(A);
+
+    SANITY_CHECK_NOTHING();
+}
+
 }
 
 } // namespace
