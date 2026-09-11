@@ -944,6 +944,23 @@ inline int hal_ni_QR64f(double* src1, size_t src1_step, int m, int n, int k, dou
 
 
 
+/**
+Eigen decomposition of a symmetric matrix \f$A\f$.
+@param src pointer to \f$N\times N\f$ symmetric matrix \f$A\f$, stored in row major order. Not modified.
+@param src_step number of bytes between two consequent rows of matrix \f$A\f$.
+@param n size of matrix \f$A\f$.
+@param evals pointer to continuous \f$N\times 1\f$ array for the eigenvalues, in descending order.
+@param evects pointer to \f$N\times N\f$ array for the eigenvectors, one per row, matching the order
+of evals. May be null, in which case only the eigenvalues are computed.
+@param evects_step number of bytes between two consequent rows of the eigenvector matrix.
+@param info set to true if the decomposition succeeded.
+*/
+//! @addtogroup core_hal_interface_decomp_eigen Eigen decomposition
+//! @{
+inline int hal_ni_eigen32f(const float* src, size_t src_step, int n, float* evals, float* evects, size_t evects_step, bool* info) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+inline int hal_ni_eigen64f(const double* src, size_t src_step, int n, double* evals, double* evects, size_t evects_step, bool* info) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+//! @}
+
 //! @cond IGNORED
 #define cv_hal_LU32f hal_ni_LU32f
 #define cv_hal_LU64f hal_ni_LU64f
@@ -953,6 +970,8 @@ inline int hal_ni_QR64f(double* src1, size_t src1_step, int m, int n, int k, dou
 #define cv_hal_SVD64f hal_ni_SVD64f
 #define cv_hal_QR32f hal_ni_QR32f
 #define cv_hal_QR64f hal_ni_QR64f
+#define cv_hal_eigen32f hal_ni_eigen32f
+#define cv_hal_eigen64f hal_ni_eigen64f
 //! @endcond
 
 

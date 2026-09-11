@@ -1095,6 +1095,18 @@ bool eigen( InputArray _src, OutputArray _evals, OutputArray _evects )
         v = _evects.getMat();
     }
 
+    {
+        _evals.create(n, 1, type);
+        Mat w_ = _evals.getMat();
+        bool hal_ok = false;
+        if( type == CV_32F )
+            CALL_HAL_RET(eigen32f, cv_hal_eigen32f, hal_ok, src.ptr<float>(), src.step, n,
+                         w_.ptr<float>(), v.empty() ? (float*)0 : v.ptr<float>(), v.step)
+        else
+            CALL_HAL_RET(eigen64f, cv_hal_eigen64f, hal_ok, src.ptr<double>(), src.step, n,
+                         w_.ptr<double>(), v.empty() ? (double*)0 : v.ptr<double>(), v.step)
+    }
+
 #ifdef HAVE_EIGEN
     const bool evecNeeded = _evects.needed();
     const int esOptions = evecNeeded ? Eigen::ComputeEigenvectors : Eigen::EigenvaluesOnly;

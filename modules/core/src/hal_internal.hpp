@@ -97,5 +97,15 @@ int lapack_gemm64fc(const double* src1, size_t src1_step, const double* src2, si
 #undef cv_hal_gemm64fc
 #define cv_hal_gemm64fc lapack_gemm64fc
 
+int lapack_eigen32f(const float* src, size_t src_step, int n, float* evals,
+                    float* evects, size_t evects_step, bool* info);
+int lapack_eigen64f(const double* src, size_t src_step, int n, double* evals,
+                    double* evects, size_t evects_step, bool* info);
+
+#undef cv_hal_eigen32f
+#define cv_hal_eigen32f lapack_eigen32f
+#undef cv_hal_eigen64f
+#define cv_hal_eigen64f lapack_eigen64f
+
 #endif //HAVE_LAPACK
 #endif //OPENCV_CORE_HAL_INTERNAL_HPP

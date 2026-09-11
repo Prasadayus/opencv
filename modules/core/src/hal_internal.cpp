@@ -62,6 +62,8 @@
 #define HAL_QR_SMALL_MATRIX_THRESH 30
 #define HAL_LU_SMALL_MATRIX_THRESH 100
 #define HAL_CHOLESKY_SMALL_MATRIX_THRESH 100
+#define HAL_EIGEN_SMALL_MATRIX_THRESH 16
+#define HAL_EIGEN_VECTORS_MATRIX_THRESH 48
 
 #if defined(__clang__) && defined(__has_feature)
 #if __has_feature(memory_sanitizer)
@@ -769,6 +771,80 @@ int lapack_gemm64fc(const double *src1, size_t src1_step, const double *src2, si
     if(m < HAL_GEMM_SMALL_COMPLEX_MATRIX_THRESH)
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
     return lapack_gemm_c(src1, src1_step, src2, src2_step, alpha, src3, src3_step, beta, dst, dst_step, m, n, k, flags);
+}
+
+// syevd destroys its input, but a symmetric matrix is the same bytes in row and column major,
+// so a plain copy is enough - no transpose as in the LU and SVD paths. LAPACK returns ascending
+// eigenvalues with the vectors as columns; OpenCV wants descending with the vectors as rows,
+// and column-major columns are row-major rows, so only the order has to be reversed.
+template <typename fptype> static inline int
+lapack_eigen(const fptype* src, size_t src_step, int n, fptype* evals,
+             fptype* evects, size_t evects_step, bool* info)
+{
+    // Accumulating the eigenvectors costs enough that syevd only wins from a larger size than
+    // the values-only path: measured 0.72x at n=16 with vectors against 2.77x without.
+    if(n < (evects ? HAL_EIGEN_VECTORS_MATRIX_THRESH : HAL_EIGEN_SMALL_MATRIX_THRESH))
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    // syevd measured faster single-threaded at every size up to n=256, so never thread it
+    ArmplSerialScope _ats(n, std::numeric_limits<int>::max());
+
+    char jobz[] = { evects ? 'V' : 'N', '\0' };
+    char uplo[] = { 'U', '\0' };
+    int _n = n, lda = n, lwork = -1, liwork = -1, _info = 0;
+
+    cv::AutoBuffer<fptype> abuf((size_t)n * n);
+    fptype* a = abuf.data();
+    for(int i = 0; i < n; i++)
+        memcpy(a + (size_t)i * n, (const uchar*)src + (size_t)i * src_step, n * sizeof(fptype));
+
+    fptype work1 = 0;
+    int iwork1 = 0;
+    if(typeid(fptype) == typeid(float))
+        OCV_LAPACK_FUNC(ssyevd)(jobz, uplo, &_n, (float*)a, &lda, (float*)evals,
+                                (float*)&work1, &lwork, &iwork1, &liwork, &_info);
+    else
+        OCV_LAPACK_FUNC(dsyevd)(jobz, uplo, &_n, (double*)a, &lda, (double*)evals,
+                                (double*)&work1, &lwork, &iwork1, &liwork, &_info);
+    if(_info != 0)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    lwork  = (int)round((double)work1);
+    liwork = iwork1;
+    cv::AutoBuffer<fptype> wbuf(lwork + 1);
+    cv::AutoBuffer<int> iwbuf(liwork + 1);
+
+    if(typeid(fptype) == typeid(float))
+        OCV_LAPACK_FUNC(ssyevd)(jobz, uplo, &_n, (float*)a, &lda, (float*)evals,
+                                (float*)wbuf.data(), &lwork, iwbuf.data(), &liwork, &_info);
+    else
+        OCV_LAPACK_FUNC(dsyevd)(jobz, uplo, &_n, (double*)a, &lda, (double*)evals,
+                                (double*)wbuf.data(), &lwork, iwbuf.data(), &liwork, &_info);
+    if(_info != 0)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    for(int i = 0; i < n / 2; i++)
+        std::swap(evals[i], evals[n - 1 - i]);
+
+    if(evects)
+        for(int i = 0; i < n; i++)
+            memcpy((uchar*)evects + (size_t)i * evects_step,
+                   a + (size_t)(n - 1 - i) * n, n * sizeof(fptype));
+
+    *info = true;
+    return CV_HAL_ERROR_OK;
+}
+
+int lapack_eigen32f(const float* src, size_t src_step, int n, float* evals,
+                    float* evects, size_t evects_step, bool* info)
+{
+    return lapack_eigen(src, src_step, n, evals, evects, evects_step, info);
+}
+
+int lapack_eigen64f(const double* src, size_t src_step, int n, double* evals,
+                    double* evects, size_t evects_step, bool* info)
+{
+    return lapack_eigen(src, src_step, n, evals, evects, evects_step, info);
 }
 
 #if defined(__APPLE__) && defined(__clang__)

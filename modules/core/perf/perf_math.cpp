@@ -518,6 +518,35 @@ PERF_TEST_P(InvertTest, invert, ::testing::Combine(
     SANITY_CHECK_NOTHING();
 }
 
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth, bool>> EigenTest;
+
+PERF_TEST_P(EigenTest, eigen, ::testing::Combine(
+    ::testing::Values(3, 4, 8, 16, 31, 64, 100, 256),
+    ::testing::Values(CV_32F, CV_64F),
+    ::testing::Bool() // needVectors
+    ))
+{
+    auto t = GetParam();
+    int n            = std::get<0>(t);
+    int mtype        = std::get<1>(t);
+    bool needVectors = std::get<2>(t);
+
+    RNG& rng = theRNG();
+    Mat A = buildRandomMat(n, n, mtype, rng, n, true);
+    Mat vals, vecs;
+
+    if (needVectors)
+    {
+        TEST_CYCLE() cv::eigen(A, vals, vecs);
+    }
+    else
+    {
+        TEST_CYCLE() cv::eigen(A, vals);
+    }
+
+    SANITY_CHECK_NOTHING();
+}
+
 typedef perf::TestBaseWithParam<std::tuple<int, MatDepth>> DeterminantTest;
 
 PERF_TEST_P(DeterminantTest, determinant, ::testing::Combine(
