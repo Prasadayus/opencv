@@ -898,15 +898,30 @@ void mulTransposed(InputArray _src, OutputArray _dst, bool ata,
     _dst.create( dsize, dsize, dtype );
     Mat dst = _dst.getMat();
 
-    // syrk covers only the plain product; a delta would need the subtraction done first
-    if( delta.empty() && stype == dtype && src.data != dst.data )
+    // syrk has no delta of its own, so centre the data first - same subtraction the gemm branch
+    // below does. calcCovarMatrix always passes a delta, so without this PCA never reaches ARMPL.
+    if( stype == dtype && src.data != dst.data )
     {
+        Mat hsrc2;
+        const Mat* hsrc = &src;
+        if( !delta.empty() )
+        {
+            if( delta.size() == src.size() )
+                subtract( src, delta, hsrc2 );
+            else
+            {
+                repeat( delta, src.rows/delta.rows, src.cols/delta.cols, hsrc2 );
+                subtract( src, hsrc2, hsrc2 );
+            }
+            hsrc = &hsrc2;
+        }
+
         if( stype == CV_32F )
-            CALL_HAL(mulTransposed32f, cv_hal_mulTransposed32f, src.ptr<float>(), src.step,
-                     dst.ptr<float>(), dst.step, src.rows, src.cols, ata, scale)
+            CALL_HAL(mulTransposed32f, cv_hal_mulTransposed32f, hsrc->ptr<float>(), hsrc->step,
+                     dst.ptr<float>(), dst.step, hsrc->rows, hsrc->cols, ata, scale)
         else if( stype == CV_64F )
-            CALL_HAL(mulTransposed64f, cv_hal_mulTransposed64f, src.ptr<double>(), src.step,
-                     dst.ptr<double>(), dst.step, src.rows, src.cols, ata, scale)
+            CALL_HAL(mulTransposed64f, cv_hal_mulTransposed64f, hsrc->ptr<double>(), hsrc->step,
+                     dst.ptr<double>(), dst.step, hsrc->rows, hsrc->cols, ata, scale)
     }
 
     if( src.data == dst.data || (stype == dtype &&

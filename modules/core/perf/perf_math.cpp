@@ -543,6 +543,29 @@ PERF_TEST_P(MulTransposedTest, ata, ::testing::Combine(
     SANITY_CHECK_NOTHING();
 }
 
+// calcCovarMatrix passes the mean as delta and an explicit ctype. ctype is passed as the data
+// type here so stype == dtype; with the default CV_64F against CV_32F data the HAL declines.
+typedef perf::TestBaseWithParam<std::tuple<std::tuple<int, int>, MatDepth>> CovarTest;
+
+PERF_TEST_P(CovarTest, calcCovarMatrix, ::testing::Combine(
+    ::testing::Values(std::make_tuple(1000, 100), std::make_tuple(5000, 50),
+                      std::make_tuple(5000, 200)),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    auto rc = std::get<0>(t);
+    int mtype = std::get<1>(t);
+    int rows = std::get<0>(rc), cols = std::get<1>(rc);
+
+    Mat data(rows, cols, mtype), covar, mean;
+    theRNG().fill(data, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::calcCovarMatrix(data, covar, mean, COVAR_NORMAL | COVAR_ROWS, mtype);
+
+    SANITY_CHECK_NOTHING();
+}
+
 typedef perf::TestBaseWithParam<std::tuple<int, MatDepth, bool>> EigenTest;
 
 PERF_TEST_P(EigenTest, eigen, ::testing::Combine(
