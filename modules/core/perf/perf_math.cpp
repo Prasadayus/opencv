@@ -518,6 +518,31 @@ PERF_TEST_P(InvertTest, invert, ::testing::Combine(
     SANITY_CHECK_NOTHING();
 }
 
+// mulTransposed hands off to cv::gemm only when every dimension is >= 100 and the types match.
+// The tall shapes are how calcCovarMatrix uses it (samples x features); 5000x50 stays below the
+// column threshold and so exercises OpenCV's own loop instead.
+typedef perf::TestBaseWithParam<std::tuple<std::tuple<int, int>, MatDepth>> MulTransposedTest;
+
+PERF_TEST_P(MulTransposedTest, ata, ::testing::Combine(
+    ::testing::Values(std::make_tuple(64, 64), std::make_tuple(128, 128),
+                      std::make_tuple(256, 256), std::make_tuple(512, 512),
+                      std::make_tuple(5000, 50), std::make_tuple(5000, 200)),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    auto rc = std::get<0>(t);
+    int mtype = std::get<1>(t);
+    int rows = std::get<0>(rc), cols = std::get<1>(rc);
+
+    Mat A(rows, cols, mtype), dst;
+    theRNG().fill(A, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::mulTransposed(A, dst, true);
+
+    SANITY_CHECK_NOTHING();
+}
+
 typedef perf::TestBaseWithParam<std::tuple<int, MatDepth, bool>> EigenTest;
 
 PERF_TEST_P(EigenTest, eigen, ::testing::Combine(

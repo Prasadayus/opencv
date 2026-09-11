@@ -898,6 +898,17 @@ void mulTransposed(InputArray _src, OutputArray _dst, bool ata,
     _dst.create( dsize, dsize, dtype );
     Mat dst = _dst.getMat();
 
+    // syrk covers only the plain product; a delta would need the subtraction done first
+    if( delta.empty() && stype == dtype && src.data != dst.data )
+    {
+        if( stype == CV_32F )
+            CALL_HAL(mulTransposed32f, cv_hal_mulTransposed32f, src.ptr<float>(), src.step,
+                     dst.ptr<float>(), dst.step, src.rows, src.cols, ata, scale)
+        else if( stype == CV_64F )
+            CALL_HAL(mulTransposed64f, cv_hal_mulTransposed64f, src.ptr<double>(), src.step,
+                     dst.ptr<double>(), dst.step, src.rows, src.cols, ata, scale)
+    }
+
     if( src.data == dst.data || (stype == dtype &&
         (dst.cols >= gemm_level && dst.rows >= gemm_level &&
          src.cols >= gemm_level && src.rows >= gemm_level)))

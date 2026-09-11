@@ -64,6 +64,7 @@
 #define HAL_CHOLESKY_SMALL_MATRIX_THRESH 100
 #define HAL_EIGEN_SMALL_MATRIX_THRESH 16
 #define HAL_EIGEN_VECTORS_MATRIX_THRESH 48
+#define HAL_MULTRANSPOSED_SMALL_MATRIX_THRESH 16
 
 #if defined(__clang__) && defined(__has_feature)
 #if __has_feature(memory_sanitizer)
@@ -833,6 +834,46 @@ lapack_eigen(const fptype* src, size_t src_step, int n, fptype* evals,
 
     *info = true;
     return CV_HAL_ERROR_OK;
+}
+
+// syrk computes half the flops of the equivalent gemm because the result is symmetric; it fills
+// one triangle, which is then mirrored. Row major needs no transpose either way.
+template <typename fptype> static inline int
+lapack_mulTransposed(const fptype* src, size_t src_step, fptype* dst, size_t dst_step,
+                     int rows, int cols, bool ata, double scale)
+{
+    const int n = ata ? cols : rows;   // output is n x n
+    const int k = ata ? rows : cols;   // contracted dimension
+    if(n < HAL_MULTRANSPOSED_SMALL_MATRIX_THRESH)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    const int lda = (int)(src_step / sizeof(fptype));
+    const int ldc = (int)(dst_step / sizeof(fptype));
+
+    if(typeid(fptype) == typeid(float))
+        cblas_ssyrk(CblasRowMajor, CblasUpper, ata ? CblasTrans : CblasNoTrans, n, k,
+                    (float)scale, (const float*)src, lda, 0.f, (float*)dst, ldc);
+    else
+        cblas_dsyrk(CblasRowMajor, CblasUpper, ata ? CblasTrans : CblasNoTrans, n, k,
+                    scale, (const double*)src, lda, 0.0, (double*)dst, ldc);
+
+    for(int i = 0; i < n; i++)
+        for(int j = 0; j < i; j++)
+            dst[(size_t)i * ldc + j] = dst[(size_t)j * ldc + i];
+
+    return CV_HAL_ERROR_OK;
+}
+
+int lapack_mulTransposed32f(const float* src, size_t src_step, float* dst, size_t dst_step,
+                            int rows, int cols, bool ata, double scale)
+{
+    return lapack_mulTransposed(src, src_step, dst, dst_step, rows, cols, ata, scale);
+}
+
+int lapack_mulTransposed64f(const double* src, size_t src_step, double* dst, size_t dst_step,
+                            int rows, int cols, bool ata, double scale)
+{
+    return lapack_mulTransposed(src, src_step, dst, dst_step, rows, cols, ata, scale);
 }
 
 int lapack_eigen32f(const float* src, size_t src_step, int n, float* evals,

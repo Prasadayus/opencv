@@ -961,6 +961,25 @@ inline int hal_ni_eigen32f(const float* src, size_t src_step, int n, float* eval
 inline int hal_ni_eigen64f(const double* src, size_t src_step, int n, double* evals, double* evects, size_t evects_step, bool* info) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
 //! @}
 
+/**
+Symmetric product of a matrix with its own transpose: \f$dst = scale \cdot src^T src\f$ when ata is
+true, \f$dst = scale \cdot src\, src^T\f$ otherwise. dst is filled symmetrically in full.
+@param src pointer to the \f$rows \times cols\f$ source matrix, stored in row major order.
+@param src_step number of bytes between two consequent rows of src.
+@param dst pointer to the output matrix, which is \f$cols \times cols\f$ when ata is true and
+\f$rows \times rows\f$ otherwise.
+@param dst_step number of bytes between two consequent rows of dst.
+@param rows number of rows in src.
+@param cols number of columns in src.
+@param ata selects \f$src^T src\f$ over \f$src\, src^T\f$.
+@param scale factor applied to the product.
+*/
+//! @addtogroup core_hal_interface_mulTransposed Symmetric rank-k update
+//! @{
+inline int hal_ni_mulTransposed32f(const float* src, size_t src_step, float* dst, size_t dst_step, int rows, int cols, bool ata, double scale) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+inline int hal_ni_mulTransposed64f(const double* src, size_t src_step, double* dst, size_t dst_step, int rows, int cols, bool ata, double scale) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+//! @}
+
 //! @cond IGNORED
 #define cv_hal_LU32f hal_ni_LU32f
 #define cv_hal_LU64f hal_ni_LU64f
@@ -972,6 +991,8 @@ inline int hal_ni_eigen64f(const double* src, size_t src_step, int n, double* ev
 #define cv_hal_QR64f hal_ni_QR64f
 #define cv_hal_eigen32f hal_ni_eigen32f
 #define cv_hal_eigen64f hal_ni_eigen64f
+#define cv_hal_mulTransposed32f hal_ni_mulTransposed32f
+#define cv_hal_mulTransposed64f hal_ni_mulTransposed64f
 //! @endcond
 
 

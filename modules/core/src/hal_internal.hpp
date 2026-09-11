@@ -102,6 +102,16 @@ int lapack_eigen32f(const float* src, size_t src_step, int n, float* evals,
 int lapack_eigen64f(const double* src, size_t src_step, int n, double* evals,
                     double* evects, size_t evects_step, bool* info);
 
+int lapack_mulTransposed32f(const float* src, size_t src_step, float* dst, size_t dst_step,
+                            int rows, int cols, bool ata, double scale);
+int lapack_mulTransposed64f(const double* src, size_t src_step, double* dst, size_t dst_step,
+                            int rows, int cols, bool ata, double scale);
+
+#undef cv_hal_mulTransposed32f
+#define cv_hal_mulTransposed32f lapack_mulTransposed32f
+#undef cv_hal_mulTransposed64f
+#define cv_hal_mulTransposed64f lapack_mulTransposed64f
+
 #undef cv_hal_eigen32f
 #define cv_hal_eigen32f lapack_eigen32f
 #undef cv_hal_eigen64f
