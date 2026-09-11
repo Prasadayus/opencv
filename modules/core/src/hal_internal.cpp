@@ -114,10 +114,73 @@ set_value(fptype *dst, size_t dst_ld, fptype value, size_t m, size_t n)
             dst[i*dst_ld + j] = value;
 }
 
+// PROTOTYPE, not for upstream. ARMPL threads through its own libomp, which OpenCV's OpenMP
+// runtime cannot reach, so resolve the entry points from that DLL directly. Inert unless the
+// threaded ARMPL is already loaded. Thresholds are provisional: a direct dgesv probe put the
+// crossover between n=100 (0.59x) and n=512 (3.99x).
+#define HAL_ARMPL_THREAD_THRESH     256
+#define HAL_ARMPL_SVD_THREAD_THRESH 512
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+namespace {
+struct ArmplOmp
+{
+    void (*set_num_threads)(int) = nullptr;
+    int  (*get_max_threads)()    = nullptr;
+    ArmplOmp()
+    {
+        HMODULE h = GetModuleHandleA("libomp.dll");
+        if (!h)
+            return;
+        set_num_threads = (void (*)(int))GetProcAddress(h, "omp_set_num_threads");
+        get_max_threads = (int (*)())GetProcAddress(h, "omp_get_max_threads");
+    }
+};
+
+static const ArmplOmp& armpl_omp() { static const ArmplOmp o; return o; }
+
+struct ArmplSerialScope
+{
+    int saved = 0;
+    ArmplSerialScope(int size, int thresh)
+    {
+        const ArmplOmp& o = armpl_omp();
+        const bool have = o.set_num_threads && o.get_max_threads;
+        int maxt = have ? o.get_max_threads() : 0;
+        if (have && size < thresh && maxt > 1)
+        {
+            saved = maxt;
+            o.set_num_threads(1);
+        }
+        if (getenv("OPENCV_ARMPL_GATE_DEBUG"))
+            fprintf(stderr, "[armpl-gate] size=%d thresh=%d libomp=%s maxthreads=%d -> %s\n",
+                    size, thresh, have ? "found" : "MISSING", maxt,
+                    saved ? "pinned to 1" : "left alone");
+    }
+    ~ArmplSerialScope()
+    {
+        if (saved)
+            armpl_omp().set_num_threads(saved);
+    }
+};
+}
+#else
+struct ArmplSerialScope { ArmplSerialScope(int, int) {} };
+#endif
+
 // MSAN can't see that the fortran LAPACK functions initialize `info`
 template <typename fptype> static inline int
 CV_ANNOTATE_NO_SANITIZE_MEMORY lapack_LU(fptype* a, size_t a_step, int m, fptype* b, size_t b_step, int n, int* info)
 {
+    ArmplSerialScope _ats(m, HAL_ARMPL_THREAD_THRESH);
 #if defined (ACCELERATE_NEW_LAPACK) && defined (ACCELERATE_LAPACK_ILP64)
     cv::AutoBuffer<long> piv_buff(m);
     long lda = (long)(a_step / sizeof(fptype));
@@ -186,6 +249,7 @@ CV_ANNOTATE_NO_SANITIZE_MEMORY lapack_LU(fptype* a, size_t a_step, int m, fptype
 template <typename fptype> static inline int
 lapack_Cholesky(fptype* a, size_t a_step, int m, fptype* b, size_t b_step, int n, bool* info)
 {
+    ArmplSerialScope _ats(m, HAL_ARMPL_THREAD_THRESH);
 #if defined (ACCELERATE_NEW_LAPACK) && defined (ACCELERATE_LAPACK_ILP64)
     long _m = static_cast<long>(m), _n = static_cast<long>(n);
     long lapackStatus = 0;
@@ -238,6 +302,7 @@ lapack_Cholesky(fptype* a, size_t a_step, int m, fptype* b, size_t b_step, int n
 template <typename fptype> static inline int
 lapack_SVD(fptype* a, size_t a_step, fptype *w, fptype* u, size_t u_step, fptype* vt, size_t v_step, int m, int n, int flags, int* info)
 {
+    ArmplSerialScope _ats(m, HAL_ARMPL_SVD_THREAD_THRESH);
 #if defined (ACCELERATE_NEW_LAPACK) && defined (ACCELERATE_LAPACK_ILP64)
     long _m = static_cast<long>(m), _n = static_cast<long>(n);
     long _info[1];
@@ -328,6 +393,7 @@ lapack_SVD(fptype* a, size_t a_step, fptype *w, fptype* u, size_t u_step, fptype
 template <typename fptype> static inline int
 lapack_QR(fptype* a, size_t a_step, int m, int n, int k, fptype* b, size_t b_step, fptype* dst, int* info)
 {
+    ArmplSerialScope _ats(m, HAL_ARMPL_THREAD_THRESH);
 #if defined (ACCELERATE_NEW_LAPACK) && defined (ACCELERATE_LAPACK_ILP64)
     long _m = static_cast<long>(m), _n = static_cast<long>(n), _k = static_cast<long>(k);
     long _info[1];
