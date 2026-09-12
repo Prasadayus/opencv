@@ -55,6 +55,7 @@
 #include <limits>
 #include <complex>
 #include <vector>
+#include <cstring>
 
 #define HAL_GEMM_SMALL_COMPLEX_MATRIX_THRESH 100
 #define HAL_GEMM_SMALL_MATRIX_THRESH 100
@@ -65,6 +66,10 @@
 #define HAL_EIGEN_SMALL_MATRIX_THRESH 16
 #define HAL_EIGEN_VECTORS_MATRIX_THRESH 48
 #define HAL_MULTRANSPOSED_SMALL_MATRIX_THRESH 16
+#define HAL_MULTRANSPOSED_THREAD_FLOPS 4e6
+#define HAL_SCALEADD_SMALL_THRESH 64
+#define HAL_MAHALANOBIS_SMALL_THRESH 16
+#define HAL_TRANSFORM_SMALL_THRESH 256
 
 #if defined(__clang__) && defined(__has_feature)
 #if __has_feature(memory_sanitizer)
@@ -138,8 +143,10 @@ struct ArmplOmp
 {
     void (*set_num_threads)(int) = nullptr;
     int  (*get_max_threads)()    = nullptr;
+    bool debug = false;
     ArmplOmp()
     {
+        debug = getenv("OPENCV_ARMPL_GATE_DEBUG") != nullptr;
         HMODULE h = GetModuleHandleA("libomp.dll");
         if (!h)
             return;
@@ -156,17 +163,23 @@ struct ArmplSerialScope
     ArmplSerialScope(int size, int thresh)
     {
         const ArmplOmp& o = armpl_omp();
-        const bool have = o.set_num_threads && o.get_max_threads;
-        int maxt = have ? o.get_max_threads() : 0;
-        if (have && size < thresh && maxt > 1)
+        // Above the threshold there is nothing to do, so skip the omp calls entirely - they are
+        // not free, and on a 0.2us Mahalanobis they cost several times the work itself.
+        if (size >= thresh || !o.set_num_threads || !o.get_max_threads)
+        {
+            if (o.debug)
+                fprintf(stderr, "[armpl-gate] size=%d thresh=%d -> left alone\n", size, thresh);
+            return;
+        }
+        int maxt = o.get_max_threads();
+        if (maxt > 1)
         {
             saved = maxt;
             o.set_num_threads(1);
         }
-        if (getenv("OPENCV_ARMPL_GATE_DEBUG"))
-            fprintf(stderr, "[armpl-gate] size=%d thresh=%d libomp=%s maxthreads=%d -> %s\n",
-                    size, thresh, have ? "found" : "MISSING", maxt,
-                    saved ? "pinned to 1" : "left alone");
+        if (o.debug)
+            fprintf(stderr, "[armpl-gate] size=%d thresh=%d maxthreads=%d -> %s\n",
+                    size, thresh, maxt, saved ? "pinned to 1" : "left alone");
     }
     ~ArmplSerialScope()
     {
@@ -847,6 +860,11 @@ lapack_mulTransposed(const fptype* src, size_t src_step, fptype* dst, size_t dst
     if(n < HAL_MULTRANSPOSED_SMALL_MATRIX_THRESH)
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
 
+    // Gate on work volume, not the output dimension: a 5000x50 input has a 50x50 output but
+    // k=5000 of depth, and threads 4.95x. Keying on n alone gated it and cost a 4.95x win.
+    const double work = (double)n * n * k;
+    ArmplSerialScope _ats(work < HAL_MULTRANSPOSED_THREAD_FLOPS ? 0 : 1, 1);
+
     const int lda = (int)(src_step / sizeof(fptype));
     const int ldc = (int)(dst_step / sizeof(fptype));
 
@@ -861,6 +879,106 @@ lapack_mulTransposed(const fptype* src, size_t src_step, fptype* dst, size_t dst
         for(int j = 0; j < i; j++)
             dst[(size_t)i * ldc + j] = dst[(size_t)j * ldc + i];
 
+    return CV_HAL_ERROR_OK;
+}
+
+// axpy works in place on y, so src2 has to be copied into dst first: two passes where OpenCV
+// fuses into one. Measured to confirm rather than assumed.
+template <typename fptype> static inline int
+lapack_scaleAdd(const fptype* src1, const fptype* src2, fptype* dst, int len, fptype alpha)
+{
+    if(len < HAL_SCALEADD_SMALL_THRESH)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    if(dst != src2)  // scaleAdd allows dst to alias src2
+        memcpy(dst, src2, (size_t)len * sizeof(fptype));
+    if(typeid(fptype) == typeid(float))
+        cblas_saxpy(len, (float)alpha, (const float*)src1, 1, (float*)dst, 1);
+    else
+        cblas_daxpy(len, (double)alpha, (const double*)src1, 1, (double*)dst, 1);
+    return CV_HAL_ERROR_OK;
+}
+
+int lapack_scaleAdd32f(const float* src1, const float* src2, float* dst, int len, float alpha)
+{
+    return lapack_scaleAdd(src1, src2, dst, len, alpha);
+}
+
+int lapack_scaleAdd64f(const double* src1, const double* src2, double* dst, int len, double alpha)
+{
+    return lapack_scaleAdd(src1, src2, dst, len, alpha);
+}
+
+// Interleaved pixels are already a column-major scn x len matrix - each element is one column -
+// so no repacking is needed. m is row-major dcn x (scn+1), which is the transpose in column-major
+// terms, hence CblasTrans with lda = scn+1. The final column of m is the offset: when it is
+// non-zero dst is prefilled with it and beta is 1, costing an extra pass.
+template <typename fptype> static inline int
+lapack_transform(const fptype* src, fptype* dst, const fptype* m, int len, int scn, int dcn)
+{
+    if(len < HAL_TRANSFORM_SMALL_THRESH)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    // M=3, K=3 is a poor gemm shape - packing overhead dominates and single-threaded ARMPL loses
+    // to OpenCV's loop (0.69x). It only wins by splitting the long N dimension across threads.
+#if defined(_WIN32)
+    if(!armpl_omp().get_max_threads || armpl_omp().get_max_threads() < 2)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+#else
+    return CV_HAL_ERROR_NOT_IMPLEMENTED;
+#endif
+
+    // An offset forces a prefill of dst before gemm can accumulate onto it - two passes against
+    // OpenCV's one, measured at 0.35x. There is no single-pass BLAS route (ger instead of the
+    // prefill is still a second pass), so decline and let OpenCV keep the affine case.
+    const int mstride = scn + 1;
+    for(int i = 0; i < dcn; i++)
+        if(m[i * mstride + scn] != (fptype)0)
+            return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    if(typeid(fptype) == typeid(float))
+        cblas_sgemm(CblasColMajor, CblasTrans, CblasNoTrans, dcn, len, scn,
+                    1.f, (const float*)m, mstride, (const float*)src, scn,
+                    0.f, (float*)dst, dcn);
+    else
+        cblas_dgemm(CblasColMajor, CblasTrans, CblasNoTrans, dcn, len, scn,
+                    1.0, (const double*)m, mstride, (const double*)src, scn,
+                    0.0, (double*)dst, dcn);
+    return CV_HAL_ERROR_OK;
+}
+
+int lapack_transform32f(const float* src, float* dst, const float* m, int len, int scn, int dcn)
+{
+    return lapack_transform(src, dst, m, len, scn, dcn);
+}
+
+int lapack_transform64f(const double* src, double* dst, const double* m, int len, int scn, int dcn)
+{
+    return lapack_transform(src, dst, m, len, scn, dcn);
+}
+
+// OpenCV's kernel here is a plain scalar loop with 4x unrolling and no SIMD, over an O(len^2)
+// quadratic form - gemv should beat it comfortably.
+int lapack_Mahalanobis64f(const double* v1, const double* v2, const double* icovar,
+                          size_t icovar_step, int len, double* result)
+{
+    if(len < HAL_MAHALANOBIS_SMALL_THRESH)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    // No thread gate here on purpose. Threading costs 0.75-0.86x below len 256, but the gate
+    // itself costs about 1.5us - more than the saving on a 2-4us call - so gating measured worse
+    // than simply letting ARMPL thread. Per-call thread control needs work above roughly 10us.
+
+    cv::AutoBuffer<double> buf((size_t)len * 2);
+    double* diff = buf.data();
+    double* tmp  = diff + len;
+
+    for(int i = 0; i < len; i++)
+        diff[i] = v1[i] - v2[i];
+
+    const int lda = (int)(icovar_step / sizeof(double));
+    cblas_dgemv(CblasRowMajor, CblasNoTrans, len, len, 1.0, icovar, lda, diff, 1, 0.0, tmp, 1);
+    *result = std::sqrt(cblas_ddot(len, diff, 1, tmp, 1));
     return CV_HAL_ERROR_OK;
 }
 
