@@ -123,6 +123,13 @@ int lapack_scaleAdd64f(const double* src1, const double* src2, double* dst, int 
 int lapack_Mahalanobis64f(const double* v1, const double* v2, const double* icovar,
                           size_t icovar_step, int len, double* result);
 
+int lapack_SVBkSb32f(int m, int n, const float* w, size_t wstep, const float* u, size_t ustep, bool uT,
+                     const float* v, size_t vstep, bool vT, const float* b, size_t bstep, int nb,
+                     float* x, size_t xstep);
+int lapack_SVBkSb64f(int m, int n, const double* w, size_t wstep, const double* u, size_t ustep, bool uT,
+                     const double* v, size_t vstep, bool vT, const double* b, size_t bstep, int nb,
+                     double* x, size_t xstep);
+
 int lapack_transform32f(const float* src, float* dst, const float* m, int len, int scn, int dcn);
 int lapack_transform64f(const double* src, double* dst, const double* m, int len, int scn, int dcn);
 
@@ -142,6 +149,11 @@ int lapack_transform64f(const double* src, double* dst, const double* m, int len
 #define cv_hal_mulTransposed32f lapack_mulTransposed32f
 #undef cv_hal_mulTransposed64f
 #define cv_hal_mulTransposed64f lapack_mulTransposed64f
+
+#undef cv_hal_SVBkSb32f
+#define cv_hal_SVBkSb32f lapack_SVBkSb32f
+#undef cv_hal_SVBkSb64f
+#define cv_hal_SVBkSb64f lapack_SVBkSb64f
 
 #undef cv_hal_eigen32f
 #define cv_hal_eigen32f lapack_eigen32f

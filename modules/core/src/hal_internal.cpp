@@ -57,6 +57,7 @@
 #endif
 
 #include <cmath>
+#include <cfloat>
 #include <algorithm>
 #include <typeinfo>
 #include <limits>
@@ -81,6 +82,7 @@
 #define HAL_NULLSPACE4X4_NINTER 4                 // small multiple of the f64 vector length (2)
 #define HAL_MULTRANSPOSED_MIN_FLOPS 4096.0
 #define HAL_MULTRANSPOSED_MIN_DIM 16
+#define HAL_SVBKSB_SMALL_MATRIX_THRESH 16
 #define HAL_SCALEADD_SMALL_THRESH 64
 #define HAL_MAHALANOBIS_SMALL_THRESH 512          // 0.46-0.92x at len 32-256, 3.31x at 512
 #define HAL_TRANSFORM_SMALL_THRESH 256
@@ -1165,6 +1167,100 @@ int lapack_mulTransposed64f(const double* src, size_t src_step, double* dst, siz
                             int rows, int cols, bool ata, double scale)
 {
     return lapack_mulTransposed(src, src_step, dst, dst_step, rows, cols, ata, scale);
+}
+
+// x = V * diag(1/w) * U^T * b, the consumer of an SVD the SVD hook already produced. OpenCV's own
+// SVBkSbImpl_ accumulates this one singular triplet at a time as a rank-1 update, which is a gemm
+// with the worst possible access pattern for the same flop count.
+//
+// The scalar path SKIPS triplets whose singular value falls at or below the threshold. Expressed
+// here as a zero scale instead: a dropped triplet contributes v_i * 0 * (u_i^T b), exactly zero, so
+// the dense product is identical to summing only the survivors.
+//
+// uT means u holds U^T (nm x m) rather than U (m x nm); vT likewise. A null b is the implicit
+// identity used by the pseudo-inverse path, where U^T is already the product and nb becomes m.
+template <typename fptype> static inline int
+lapack_SVBkSb(int m, int n, const fptype* w, size_t wstep,
+              const fptype* u, size_t ustep, bool uT,
+              const fptype* v, size_t vstep, bool vT,
+              const fptype* b, size_t bstep, int nb,
+              fptype* x, size_t xstep)
+{
+    const int nm = std::min(m, n);
+    if(!b)
+        nb = m;
+    if(nm <= 0 || nb <= 0)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    // nm, n and nb are the three dimensions of the two gemms below, and every one of them has to be
+    // real. nb in particular is the N of both: cv::solve passes nb == 1 for a single right-hand
+    // side, which makes them gemv, and level 2 has lost every time it was measured here - dot
+    // 0.73x, norm 0.39-1.19x, Mahalanobis only past len 512. cv::invert(DECOMP_SVD) passes nb = m
+    // and clears this comfortably.
+    if(std::min(std::min(nm, n), nb) < HAL_SVBKSB_SMALL_MATRIX_THRESH)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    const int incw = wstep ? (int)(wstep / sizeof(fptype)) : 1;
+    const int ldu  = (int)(ustep / sizeof(fptype));
+    const int ldv  = (int)(vstep / sizeof(fptype));
+    const int ldb  = b ? (int)(bstep / sizeof(fptype)) : 0;
+    const int ldx  = (int)(xstep / sizeof(fptype));
+
+    double threshold = 0;
+    for(int i = 0; i < nm; i++)
+        threshold += w[i * incw];
+    threshold *= DBL_EPSILON * 2;
+
+    cv::AutoBuffer<fptype> tmpbuf((size_t)nm * nb);
+    fptype* tmp = tmpbuf.data();
+
+    if(b)
+    {
+        if(typeid(fptype) == typeid(float))
+            cblas_sgemm(CblasRowMajor, uT ? CblasNoTrans : CblasTrans, CblasNoTrans, nm, nb, m,
+                        1.f, (const float*)u, ldu, (const float*)b, ldb, 0.f, (float*)tmp, nb);
+        else
+            cblas_dgemm(CblasRowMajor, uT ? CblasNoTrans : CblasTrans, CblasNoTrans, nm, nb, m,
+                        1.0, (const double*)u, ldu, (const double*)b, ldb, 0.0, (double*)tmp, nb);
+    }
+    else
+    {
+        for(int i = 0; i < nm; i++)
+            for(int j = 0; j < nb; j++)
+                tmp[(size_t)i * nb + j] = uT ? u[(size_t)i * ldu + j] : u[(size_t)j * ldu + i];
+    }
+
+    for(int i = 0; i < nm; i++)
+    {
+        const double wi = w[i * incw];
+        const fptype s = std::abs(wi) <= threshold ? (fptype)0 : (fptype)(1.0 / wi);
+        fptype* trow = tmp + (size_t)i * nb;
+        for(int j = 0; j < nb; j++)
+            trow[j] = trow[j] * s;
+    }
+
+    if(typeid(fptype) == typeid(float))
+        cblas_sgemm(CblasRowMajor, vT ? CblasTrans : CblasNoTrans, CblasNoTrans, n, nb, nm,
+                    1.f, (const float*)v, ldv, (const float*)tmp, nb, 0.f, (float*)x, ldx);
+    else
+        cblas_dgemm(CblasRowMajor, vT ? CblasTrans : CblasNoTrans, CblasNoTrans, n, nb, nm,
+                    1.0, (const double*)v, ldv, (const double*)tmp, nb, 0.0, (double*)x, ldx);
+
+    return CV_HAL_ERROR_OK;
+}
+
+int lapack_SVBkSb32f(int m, int n, const float* w, size_t wstep, const float* u, size_t ustep, bool uT,
+                     const float* v, size_t vstep, bool vT, const float* b, size_t bstep, int nb,
+                     float* x, size_t xstep)
+{
+    return lapack_SVBkSb(m, n, w, wstep, u, ustep, uT, v, vstep, vT, b, bstep, nb, x, xstep);
+}
+
+int lapack_SVBkSb64f(int m, int n, const double* w, size_t wstep, const double* u, size_t ustep, bool uT,
+                     const double* v, size_t vstep, bool vT, const double* b, size_t bstep, int nb,
+                     double* x, size_t xstep)
+{
+    return lapack_SVBkSb(m, n, w, wstep, u, ustep, uT, v, vstep, vT, b, bstep, nb, x, xstep);
 }
 
 int lapack_eigen32f(const float* src, size_t src_step, int n, float* evals,

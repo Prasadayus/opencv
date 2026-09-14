@@ -909,6 +909,9 @@ void mulTransposed(InputArray _src, OutputArray _dst, bool ata,
 
     Mat src = _src.getMat(), delta = _delta.getMat();
     const int gemm_level = 100; // boundary above which GEMM is faster.
+    // mirrors the HAL hook's own dimension floor, so a conversion is only paid when the hook that
+    // needs it will actually accept the result - see the HAL block below
+    const int hal_convert_level = 16;
     int stype = src.type();
     dtype = std::max(std::max(CV_MAT_DEPTH(dtype >= 0 ? dtype : stype), delta.depth()), CV_32F);
     CV_Assert( src.channels() == 1 );
@@ -928,26 +931,45 @@ void mulTransposed(InputArray _src, OutputArray _dst, bool ata,
 
     // syrk has no delta of its own, so centre the data first - same subtraction the gemm branch
     // below does. calcCovarMatrix always passes a delta, so without this PCA never reaches ARMPL.
-    if( stype == dtype && src.data != dst.data )
+    //
+    // A source type differing from dtype blocks this hook AND the gemm branch below - both test
+    // stype == dtype - so cv::PCA on 8-bit images reaches neither, at any size. pca.cpp sets
+    // ctype = max(CV_32F, data.depth()), so 8U/16U/16S input always mismatches. One conversion
+    // pass buys the whole syrk: at EigenFaces size (400 x 10304) that is ~16 MB copied against
+    // 1.65 Gflop. Numerically identical - MulTransposedR<uchar,float> already accumulates in the
+    // destination type. Gated on dsize rather than on total work: the case that would waste a
+    // conversion is a small output over a huge reduction, which any work-based test lets through
+    // and the hook then declines on its dimension floor anyway.
+    const bool hal_convert = stype != dtype && (dtype == CV_32F || dtype == CV_64F) &&
+                             dsize >= hal_convert_level;
+
+    if( src.data != dst.data && (stype == dtype || hal_convert) )
     {
-        Mat hsrc2;
+        Mat hsrc2, hsrcConv;
         const Mat* hsrc = &src;
+
+        if( hal_convert )
+        {
+            src.convertTo( hsrcConv, dtype );
+            hsrc = &hsrcConv;
+        }
+
         if( !delta.empty() )
         {
             if( delta.size() == src.size() )
-                subtract( src, delta, hsrc2 );
+                subtract( *hsrc, delta, hsrc2 );
             else
             {
                 repeat( delta, src.rows/delta.rows, src.cols/delta.cols, hsrc2 );
-                subtract( src, hsrc2, hsrc2 );
+                subtract( *hsrc, hsrc2, hsrc2 );
             }
             hsrc = &hsrc2;
         }
 
-        if( stype == CV_32F )
+        if( dtype == CV_32F )
             CALL_HAL(mulTransposed32f, cv_hal_mulTransposed32f, hsrc->ptr<float>(), hsrc->step,
                      dst.ptr<float>(), dst.step, hsrc->rows, hsrc->cols, ata, scale)
-        else if( stype == CV_64F )
+        else if( dtype == CV_64F )
             CALL_HAL(mulTransposed64f, cv_hal_mulTransposed64f, hsrc->ptr<double>(), hsrc->step,
                      dst.ptr<double>(), dst.step, hsrc->rows, hsrc->cols, ata, scale)
     }

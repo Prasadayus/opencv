@@ -1029,6 +1029,20 @@ inline int hal_ni_mulTransposed64f(const double* src, size_t src_step, double* d
 //! @}
 
 /**
+SVD back substitution \f$x = V \cdot diag(1/w) \cdot U^T \cdot b\f$, the consumer of an SVD that
+cv_hal_SVD32f/64f produced. Singular values at or below \f$\epsilon \sum w\f$ are dropped.
+@param m,n dimensions of the original decomposed matrix; nm = min(m,n) triplets are used
+@param uT true when u holds \f$U^T\f$ (nm x m) rather than U (m x nm); vT likewise for v
+@param b right-hand sides, nb of them; a NULL b means the identity, in which case nb is taken as m
+@param x receives the n x nb result
+*/
+//! @addtogroup core_hal_interface_SVBkSb SVD back substitution
+//! @{
+inline int hal_ni_SVBkSb32f(int m, int n, const float* w, size_t wstep, const float* u, size_t ustep, bool uT, const float* v, size_t vstep, bool vT, const float* b, size_t bstep, int nb, float* x, size_t xstep) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+inline int hal_ni_SVBkSb64f(int m, int n, const double* w, size_t wstep, const double* u, size_t ustep, bool uT, const double* v, size_t vstep, bool vT, const double* b, size_t bstep, int nb, double* x, size_t xstep) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+//! @}
+
+/**
 \f$dst = alpha \cdot src1 + src2\f$ over len contiguous elements.
 */
 //! @addtogroup core_hal_interface_scaleAdd Scaled vector addition
@@ -1073,6 +1087,8 @@ inline int hal_ni_transform64f(const double* src, double* dst, const double* m, 
 #define cv_hal_eigenNonSymmetric64f hal_ni_eigenNonSymmetric64f
 #define cv_hal_batchDistL2Sqr32f hal_ni_batchDistL2Sqr32f
 #define cv_hal_nullspace4x4Batch64f hal_ni_nullspace4x4Batch64f
+#define cv_hal_SVBkSb32f hal_ni_SVBkSb32f
+#define cv_hal_SVBkSb64f hal_ni_SVBkSb64f
 #define cv_hal_mulTransposed32f hal_ni_mulTransposed32f
 #define cv_hal_mulTransposed64f hal_ni_mulTransposed64f
 #define cv_hal_scaleAdd32f hal_ni_scaleAdd32f

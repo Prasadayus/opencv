@@ -693,6 +693,36 @@ PERF_TEST_P(EigenTest, eigen, ::testing::Combine(
     SANITY_CHECK_NOTHING();
 }
 
+// cv::PCA had no perf coverage. It matters here because pca.cpp sets ctype = max(CV_32F,
+// data.depth()), so 8-bit input gives stype != dtype - and BOTH the HAL hook and the gemm fallback
+// in mulTransposed test stype == dtype. Image PCA therefore reached neither, at any size. CV_8U is
+// the case that was blocked; CV_32F is the control that already worked. 400x10304 is the AT&T
+// EigenFaces shape, whose covariance is 400x400 over 10304 - about 1.65 Gflop.
+typedef perf::TestBaseWithParam<std::tuple<std::tuple<int, int>, MatDepth>> PCATest;
+
+PERF_TEST_P(PCATest, compute, ::testing::Combine(
+    ::testing::Values(std::make_tuple(200, 4096), std::make_tuple(400, 10304)),
+    ::testing::Values(CV_8U, CV_32F)
+    ))
+{
+    auto t = GetParam();
+    auto rc = std::get<0>(t);
+    int mtype = std::get<1>(t);
+    int rows = std::get<0>(rc), cols = std::get<1>(rc);
+
+    Mat data(rows, cols, mtype);
+    theRNG().fill(data, RNG::UNIFORM, Scalar(0), Scalar(256));
+
+    PCA pca;
+
+    declare.time(120);
+
+    TEST_CYCLE() pca = PCA(data, noArray(), PCA::DATA_AS_ROW, 16);
+
+    EXPECT_FALSE(pca.eigenvalues.empty());
+    SANITY_CHECK_NOTHING();
+}
+
 typedef perf::TestBaseWithParam<std::tuple<int, MatDepth>> DeterminantTest;
 
 PERF_TEST_P(DeterminantTest, determinant, ::testing::Combine(

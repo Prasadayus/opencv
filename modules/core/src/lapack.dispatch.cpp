@@ -443,6 +443,8 @@ SVBkSb( int m, int n, const float* w, size_t wstep,
         const float* b, size_t bstep, int nb,
         float* x, size_t xstep, uchar* buffer )
 {
+    CALL_HAL(SVBkSb32f, cv_hal_SVBkSb32f, m, n, w, wstep, u, ustep, uT, v, vstep, vT,
+             b, bstep, nb, x, xstep)
     SVBkSbImpl_(m, n, w, wstep ? (int)(wstep/sizeof(w[0])) : 1,
                 u, (int)(ustep/sizeof(u[0])), uT,
                 v, (int)(vstep/sizeof(v[0])), vT,
@@ -458,6 +460,8 @@ SVBkSb( int m, int n, const double* w, size_t wstep,
        const double* b, size_t bstep, int nb,
        double* x, size_t xstep, uchar* buffer )
 {
+    CALL_HAL(SVBkSb64f, cv_hal_SVBkSb64f, m, n, w, wstep, u, ustep, uT, v, vstep, vT,
+             b, bstep, nb, x, xstep)
     SVBkSbImpl_(m, n, w, wstep ? (int)(wstep/sizeof(w[0])) : 1,
                 u, (int)(ustep/sizeof(u[0])), uT,
                 v, (int)(vstep/sizeof(v[0])), vT,
