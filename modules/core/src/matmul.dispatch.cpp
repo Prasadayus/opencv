@@ -516,6 +516,19 @@ void transform(InputArray _src, OutputArray _dst, InputArray _mtx)
         }
     }
 
+    // OpenCV's hand-written SIMD transform is compiled out on ARM64 (matmul.simd.hpp:2129
+    // excludes _M_ARM64), leaving the scalar template, so gemm has a real baseline to beat.
+    // The diagonal case keeps its own specialised path.
+    if( !isDiag && src.isContinuous() && dst.isContinuous() )
+    {
+        if( depth == CV_32F && mtype == CV_32F )
+            CALL_HAL(transform32f, cv_hal_transform32f, src.ptr<float>(), dst.ptr<float>(),
+                     (const float*)mbuf, (int)src.total(), scn, dcn)
+        else if( depth == CV_64F && mtype == CV_64F )
+            CALL_HAL(transform64f, cv_hal_transform64f, src.ptr<double>(), dst.ptr<double>(),
+                     (const double*)mbuf, (int)src.total(), scn, dcn)
+    }
+
     TransformFunc func = isDiag ? getDiagTransformFunc(depth): getTransformFunc(depth);
     CV_Assert( func != 0 );
 
@@ -668,6 +681,12 @@ void scaleAdd(InputArray _src1, double alpha, InputArray _src2, OutputArray _dst
     if (src1.isContinuous() && src2.isContinuous() && dst.isContinuous())
     {
         size_t len = src1.total()*cn;
+        if( depth == CV_32F )
+            CALL_HAL(scaleAdd32f, cv_hal_scaleAdd32f, src1.ptr<float>(), src2.ptr<float>(),
+                     dst.ptr<float>(), (int)len, falpha)
+        else if( depth == CV_64F )
+            CALL_HAL(scaleAdd64f, cv_hal_scaleAdd64f, src1.ptr<double>(), src2.ptr<double>(),
+                     dst.ptr<double>(), (int)len, alpha)
         func(src1.ptr(), src2.ptr(), dst.ptr(), (int)len, palpha);
         return;
     }
@@ -848,6 +867,15 @@ double Mahalanobis(InputArray _v1, InputArray _v2, InputArray _icovar)
     {
         sz.width *= sz.height;
         sz.height = 1;
+    }
+
+    // f32 is left to OpenCV: its kernel accumulates the difference in double, so a float gemv
+    // would change the result rather than just speed it up.
+    if( depth == CV_64F && v1.isContinuous() && v2.isContinuous() )
+    {
+        double hres = 0;
+        CALL_HAL_RET(Mahalanobis64f, cv_hal_Mahalanobis64f, hres, v1.ptr<double>(),
+                     v2.ptr<double>(), icovar.ptr<double>(), icovar.step, len)
     }
 
     MahalanobisImplFunc func = getMahalanobisImplFunc(depth);

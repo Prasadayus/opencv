@@ -330,6 +330,20 @@ void hal::SVD64f(double* At, size_t astep, double* W, double* U, size_t ustep, d
         CV_CPU_DISPATCH_MODES_ALL);
 }
 
+// There is no generic fallback here on purpose: the caller already has a per-element path that is
+// correct, and duplicating it would be a second implementation to keep in step. Returning false
+// means "nothing was written, run your own loop".
+bool hal::nullspace4x4Batch64f(const double* src, int count, double* dst)
+{
+    int res = cv_hal_nullspace4x4Batch64f(src, count, dst);
+    if( res == CV_HAL_ERROR_OK )
+        return true;
+    if( res != CV_HAL_ERROR_NOT_IMPLEMENTED )
+        CV_Error_(cv::Error::StsInternal,
+                  ("HAL implementation nullspace4x4Batch64f returned %d (0x%08x)", res, res));
+    return false;
+}
+
 /* y[0:m,0:n] += diag(a[0:1,0:m]) * x[0:m,0:n] */
 template<typename T1, typename T2, typename T3> static void
 MatrAXPY( int m, int n, const T1* x, int dx,

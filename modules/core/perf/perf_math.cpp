@@ -526,7 +526,10 @@ typedef perf::TestBaseWithParam<std::tuple<std::tuple<int, int>, MatDepth>> MulT
 PERF_TEST_P(MulTransposedTest, ata, ::testing::Combine(
     ::testing::Values(std::make_tuple(64, 64), std::make_tuple(128, 128),
                       std::make_tuple(256, 256), std::make_tuple(512, 512),
-                      std::make_tuple(5000, 50), std::make_tuple(5000, 200)),
+                      std::make_tuple(5000, 50), std::make_tuple(5000, 200),
+                      // the two real J.t()*J shapes: fisheye::stereoCalibrate at 20 images,
+                      // and the stitching bundle adjuster at 30 images
+                      std::make_tuple(4320, 144), std::make_tuple(45000, 120)),
     ::testing::Values(CV_32F, CV_64F)
     ))
 {
@@ -539,6 +542,75 @@ PERF_TEST_P(MulTransposedTest, ata, ::testing::Combine(
     theRNG().fill(A, RNG::UNIFORM, Scalar(-1), Scalar(1));
 
     TEST_CYCLE() cv::mulTransposed(A, dst, true);
+
+    SANITY_CHECK_NOTHING();
+}
+
+// cv::transform's hand-written SIMD is compiled out on ARM64, so the baseline here is the
+// generic scalar template. scn==dcn==3 is the common colour-conversion shape.
+typedef perf::TestBaseWithParam<std::tuple<Size, MatDepth, bool>> TransformTest;
+
+PERF_TEST_P(TransformTest, transform, ::testing::Combine(
+    ::testing::Values(Size(640, 480), Size(1920, 1080)),
+    ::testing::Values(CV_32F, CV_64F),
+    ::testing::Bool() // affine offset
+    ))
+{
+    auto t = GetParam();
+    Size sz    = std::get<0>(t);
+    int mtype  = std::get<1>(t);
+    bool affine = std::get<2>(t);
+
+    Mat src(sz, CV_MAKETYPE(mtype, 3)), dst;
+    theRNG().fill(src, RNG::UNIFORM, Scalar::all(-1), Scalar::all(1));
+
+    Mat m(3, affine ? 4 : 3, mtype);
+    theRNG().fill(m, RNG::UNIFORM, Scalar::all(-1), Scalar::all(1));
+
+    TEST_CYCLE() cv::transform(src, dst, m);
+
+    SANITY_CHECK_NOTHING();
+}
+
+typedef perf::TestBaseWithParam<std::tuple<Size, MatDepth>> ScaleAddTest;
+
+PERF_TEST_P(ScaleAddTest, scaleAdd, ::testing::Combine(
+    ::testing::Values(Size(640, 480), Size(1920, 1080)),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    Size sz   = std::get<0>(t);
+    int mtype = std::get<1>(t);
+
+    Mat a(sz, mtype), b(sz, mtype), dst;
+    theRNG().fill(a, RNG::UNIFORM, Scalar(-1), Scalar(1));
+    theRNG().fill(b, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::scaleAdd(a, 2.5, b, dst);
+
+    SANITY_CHECK_NOTHING();
+}
+
+// icovar is len x len, so the quadratic form is O(len^2) and dominates.
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth>> MahalanobisTest;
+
+PERF_TEST_P(MahalanobisTest, mahalanobis, ::testing::Combine(
+    ::testing::Values(32, 64, 128, 256, 512),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    int len   = std::get<0>(t);
+    int mtype = std::get<1>(t);
+
+    Mat v1(1, len, mtype), v2(1, len, mtype), icovar(len, len, mtype);
+    RNG& rng = theRNG();
+    rng.fill(v1, RNG::UNIFORM, Scalar(-1), Scalar(1));
+    rng.fill(v2, RNG::UNIFORM, Scalar(-1), Scalar(1));
+    rng.fill(icovar, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::Mahalanobis(v1, v2, icovar);
 
     SANITY_CHECK_NOTHING();
 }
@@ -562,6 +634,32 @@ PERF_TEST_P(CovarTest, calcCovarMatrix, ::testing::Combine(
     theRNG().fill(data, RNG::UNIFORM, Scalar(-1), Scalar(1));
 
     TEST_CYCLE() cv::calcCovarMatrix(data, covar, mean, COVAR_NORMAL | COVAR_ROWS, mtype);
+
+    SANITY_CHECK_NOTHING();
+}
+
+// cv::eigenNonSymmetric and cv::LDA share the same hand-rolled JAMA path in lda.cpp; a
+// non-symmetric matrix never takes the cv::eigen fallback there.
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth>> EigenNonSymTest;
+
+PERF_TEST_P(EigenNonSymTest, eigenNonSymmetric, ::testing::Combine(
+    ::testing::Values(16, 32, 64, 128, 256),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    int n     = std::get<0>(t);
+    int mtype = std::get<1>(t);
+
+    // inv(Sw)*Sb as cv::LDA builds it: a product of two symmetric matrices, which is not
+    // itself symmetric but does have real eigenvalues
+    RNG& rng = theRNG();
+    Mat Sw = buildRandomMat(n, n, mtype, rng, n, true);
+    Mat Sb = buildRandomMat(n, n, mtype, rng, n, true);
+    Mat A = Sw.inv() * Sb;
+
+    Mat vals, vecs;
+    TEST_CYCLE() cv::eigenNonSymmetric(A, vals, vecs);
 
     SANITY_CHECK_NOTHING();
 }

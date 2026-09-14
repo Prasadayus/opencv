@@ -49,6 +49,13 @@
 
 #include "opencv_lapack.h"
 
+#ifdef HAVE_ARMPL
+// The interleaved-batch family is ARMPL-specific - no other LAPACK exposes it - so everything
+// built on it is guarded. opencv_lapack.h pulls in cblas.h and lapack.h but not this one; it
+// resolves through ARMPL_INCLUDE_DIRS, which OpenCVFindLibsPerf.cmake:45 puts on every target.
+#include <armpl_interleave_batch.h>
+#endif
+
 #include <cmath>
 #include <algorithm>
 #include <typeinfo>
@@ -65,8 +72,13 @@
 #define HAL_CHOLESKY_SMALL_MATRIX_THRESH 100
 #define HAL_EIGEN_SMALL_MATRIX_THRESH 16
 #define HAL_EIGEN_VECTORS_MATRIX_THRESH 48
-#define HAL_MULTRANSPOSED_SMALL_MATRIX_THRESH 16
-#define HAL_MULTRANSPOSED_THREAD_FLOPS 4e6
+#define HAL_EIGEN_NONSYM_SMALL_MATRIX_THRESH 16   // provisional, set from the measurement
+#define HAL_BATCHDIST_MIN_MACS 2e7                // m*n*len; provisional, set from the measurement
+#define HAL_BATCHDIST_MIN_LEN 16                  // overhead is 1/m + 1/n + 1/len extra passes and
+                                                  // the 1/len term never improves with size
+#define HAL_NULLSPACE4X4_MIN_COUNT 64             // provisional, set from the measurement
+#define HAL_NULLSPACE4X4_NINTER 4                 // small multiple of the f64 vector length (2)
+#define HAL_MULTRANSPOSED_MIN_FLOPS 4096.0   // was: output dim < 16, i.e. 16^3 square
 #define HAL_SCALEADD_SMALL_THRESH 64
 #define HAL_MAHALANOBIS_SMALL_THRESH 16
 #define HAL_TRANSFORM_SMALL_THRESH 256
@@ -122,81 +134,10 @@ set_value(fptype *dst, size_t dst_ld, fptype value, size_t m, size_t n)
             dst[i*dst_ld + j] = value;
 }
 
-// PROTOTYPE, not for upstream. ARMPL threads through its own libomp, which OpenCV's OpenMP
-// runtime cannot reach, so resolve the entry points from that DLL directly. Inert unless the
-// threaded ARMPL is already loaded. Thresholds are provisional: a direct dgesv probe put the
-// crossover between n=100 (0.59x) and n=512 (3.99x).
-#define HAL_ARMPL_THREAD_THRESH     256
-#define HAL_ARMPL_SVD_THREAD_THRESH 512
-
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-
-namespace {
-struct ArmplOmp
-{
-    void (*set_num_threads)(int) = nullptr;
-    int  (*get_max_threads)()    = nullptr;
-    bool debug = false;
-    ArmplOmp()
-    {
-        debug = getenv("OPENCV_ARMPL_GATE_DEBUG") != nullptr;
-        HMODULE h = GetModuleHandleA("libomp.dll");
-        if (!h)
-            return;
-        set_num_threads = (void (*)(int))GetProcAddress(h, "omp_set_num_threads");
-        get_max_threads = (int (*)())GetProcAddress(h, "omp_get_max_threads");
-    }
-};
-
-static const ArmplOmp& armpl_omp() { static const ArmplOmp o; return o; }
-
-struct ArmplSerialScope
-{
-    int saved = 0;
-    ArmplSerialScope(int size, int thresh)
-    {
-        const ArmplOmp& o = armpl_omp();
-        // Above the threshold there is nothing to do, so skip the omp calls entirely - they are
-        // not free, and on a 0.2us Mahalanobis they cost several times the work itself.
-        if (size >= thresh || !o.set_num_threads || !o.get_max_threads)
-        {
-            if (o.debug)
-                fprintf(stderr, "[armpl-gate] size=%d thresh=%d -> left alone\n", size, thresh);
-            return;
-        }
-        int maxt = o.get_max_threads();
-        if (maxt > 1)
-        {
-            saved = maxt;
-            o.set_num_threads(1);
-        }
-        if (o.debug)
-            fprintf(stderr, "[armpl-gate] size=%d thresh=%d maxthreads=%d -> %s\n",
-                    size, thresh, maxt, saved ? "pinned to 1" : "left alone");
-    }
-    ~ArmplSerialScope()
-    {
-        if (saved)
-            armpl_omp().set_num_threads(saved);
-    }
-};
-}
-#else
-struct ArmplSerialScope { ArmplSerialScope(int, int) {} };
-#endif
-
 // MSAN can't see that the fortran LAPACK functions initialize `info`
 template <typename fptype> static inline int
 CV_ANNOTATE_NO_SANITIZE_MEMORY lapack_LU(fptype* a, size_t a_step, int m, fptype* b, size_t b_step, int n, int* info)
 {
-    ArmplSerialScope _ats(m, HAL_ARMPL_THREAD_THRESH);
 #if defined (ACCELERATE_NEW_LAPACK) && defined (ACCELERATE_LAPACK_ILP64)
     cv::AutoBuffer<long> piv_buff(m);
     long lda = (long)(a_step / sizeof(fptype));
@@ -265,7 +206,6 @@ CV_ANNOTATE_NO_SANITIZE_MEMORY lapack_LU(fptype* a, size_t a_step, int m, fptype
 template <typename fptype> static inline int
 lapack_Cholesky(fptype* a, size_t a_step, int m, fptype* b, size_t b_step, int n, bool* info)
 {
-    ArmplSerialScope _ats(m, HAL_ARMPL_THREAD_THRESH);
 #if defined (ACCELERATE_NEW_LAPACK) && defined (ACCELERATE_LAPACK_ILP64)
     long _m = static_cast<long>(m), _n = static_cast<long>(n);
     long lapackStatus = 0;
@@ -318,7 +258,6 @@ lapack_Cholesky(fptype* a, size_t a_step, int m, fptype* b, size_t b_step, int n
 template <typename fptype> static inline int
 lapack_SVD(fptype* a, size_t a_step, fptype *w, fptype* u, size_t u_step, fptype* vt, size_t v_step, int m, int n, int flags, int* info)
 {
-    ArmplSerialScope _ats(m, HAL_ARMPL_SVD_THREAD_THRESH);
 #if defined (ACCELERATE_NEW_LAPACK) && defined (ACCELERATE_LAPACK_ILP64)
     long _m = static_cast<long>(m), _n = static_cast<long>(n);
     long _info[1];
@@ -409,7 +348,6 @@ lapack_SVD(fptype* a, size_t a_step, fptype *w, fptype* u, size_t u_step, fptype
 template <typename fptype> static inline int
 lapack_QR(fptype* a, size_t a_step, int m, int n, int k, fptype* b, size_t b_step, fptype* dst, int* info)
 {
-    ArmplSerialScope _ats(m, HAL_ARMPL_THREAD_THRESH);
 #if defined (ACCELERATE_NEW_LAPACK) && defined (ACCELERATE_LAPACK_ILP64)
     long _m = static_cast<long>(m), _n = static_cast<long>(n), _k = static_cast<long>(k);
     long _info[1];
@@ -761,6 +699,7 @@ int lapack_gemm32f(const float *src1, size_t src1_step, const float *src2, size_
 {
     if(m < HAL_GEMM_SMALL_MATRIX_THRESH)
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
+    // OpenCV's threshold above looks at m only, so a rank-1 update (k=1) with many rows passes it.
     return lapack_gemm(src1, src1_step, src2, src2_step, alpha, src3, src3_step, beta, dst, dst_step, m, n, k, flags);
 }
 
@@ -799,9 +738,6 @@ lapack_eigen(const fptype* src, size_t src_step, int n, fptype* evals,
     // the values-only path: measured 0.72x at n=16 with vectors against 2.77x without.
     if(n < (evects ? HAL_EIGEN_VECTORS_MATRIX_THRESH : HAL_EIGEN_SMALL_MATRIX_THRESH))
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
-
-    // syevd measured faster single-threaded at every size up to n=256, so never thread it
-    ArmplSerialScope _ats(n, std::numeric_limits<int>::max());
 
     char jobz[] = { evects ? 'V' : 'N', '\0' };
     char uplo[] = { 'U', '\0' };
@@ -849,6 +785,228 @@ lapack_eigen(const fptype* src, size_t src_step, int n, fptype* evals,
     return CV_HAL_ERROR_OK;
 }
 
+// geev replaces the hand-transcribed JAMA orthes()+hqr2() in lda.cpp with one call. LAPACK is
+// column major, so the input transposes in and the eigenvectors transpose out - both O(n^2)
+// against an O(n^3) decomposition. Eigenvalues come back unsorted with the vectors in columns,
+// which is what the JAMA path produced and what both callers sort afterwards.
+template <typename fptype> static inline int
+lapack_eigenNonSymmetric(const fptype* src, size_t src_step, int n, fptype* evals,
+                         fptype* evects, size_t evects_step, bool* info)
+{
+    if(n < HAL_EIGEN_NONSYM_SMALL_MATRIX_THRESH)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    char jobvl[] = { 'N', '\0' };
+    char jobvr[] = { evects ? 'V' : 'N', '\0' };
+    int _n = n, lda = n, ldvl = 1, ldvr = evects ? n : 1, lwork = -1, _info = 0;
+
+    cv::AutoBuffer<fptype> abuf((size_t)n * n);
+    fptype* a = abuf.data();
+    transpose(src, src_step / sizeof(fptype), a, (size_t)n, (size_t)n, (size_t)n);
+
+    // vl is never referenced with jobvl='N', but some LAPACK builds still validate the pointer
+    cv::AutoBuffer<fptype> wibuf(n), vlbuf(1), vrbuf(evects ? (size_t)n * n : 1);
+    fptype *wi = wibuf.data(), *vl = vlbuf.data(), *vr = vrbuf.data();
+
+    fptype work1 = 0;
+    if(typeid(fptype) == typeid(float))
+        OCV_LAPACK_FUNC(sgeev)(jobvl, jobvr, &_n, (float*)a, &lda, (float*)evals, (float*)wi,
+                               (float*)vl, &ldvl, (float*)vr, &ldvr, (float*)&work1, &lwork, &_info);
+    else
+        OCV_LAPACK_FUNC(dgeev)(jobvl, jobvr, &_n, (double*)a, &lda, (double*)evals, (double*)wi,
+                               (double*)vl, &ldvl, (double*)vr, &ldvr, (double*)&work1, &lwork, &_info);
+    if(_info != 0)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    lwork = (int)round((double)work1);
+    cv::AutoBuffer<fptype> wbuf(lwork + 1);
+
+    if(typeid(fptype) == typeid(float))
+        OCV_LAPACK_FUNC(sgeev)(jobvl, jobvr, &_n, (float*)a, &lda, (float*)evals, (float*)wi,
+                               (float*)vl, &ldvl, (float*)vr, &ldvr, (float*)wbuf.data(), &lwork, &_info);
+    else
+        OCV_LAPACK_FUNC(dgeev)(jobvl, jobvr, &_n, (double*)a, &lda, (double*)evals, (double*)wi,
+                               (double*)vl, &ldvl, (double*)vr, &ldvr, (double*)wbuf.data(), &lwork, &_info);
+    if(_info != 0)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    // wi is dropped: the JAMA path stored only the real parts too
+    if(evects)
+        transpose(vr, (size_t)n, evects, evects_step / sizeof(fptype), (size_t)n, (size_t)n);
+
+    *info = true;
+    return CV_HAL_ERROR_OK;
+}
+
+// ||a-b||^2 = |a|^2 + |b|^2 - 2 a.b, so the cross term over every pair is a single gemm.
+//
+// A probe of ARMPL's sgemm settled the shape of this before it was written. Serial sgemm runs at
+// ~48 G MAC/s at every size here - that is about 92% of one Oryon core's peak, so it is not slow,
+// it is one core against a baseline that uses all twelve. Tiling serial gemms across
+// parallel_for_ measured 0.11x to 0.48x of one threaded call (and collapsed outright at
+// 512x512x64, where 43-row tiles are too small to amortise packing). So: one threaded gemm here,
+// called from outside batchDistance's parallel_for_, and the epilogue parallelised separately.
+int lapack_batchDistL2Sqr32f(const float* src1, size_t src1_step, int m,
+                             const float* src2, size_t src2_step, int n,
+                             int len, float* dst, size_t dst_step, bool sqrt_dist)
+{
+    const double macs = (double)m * n * len;
+    if(m <= 0 || n <= 0 || len < HAL_BATCHDIST_MIN_LEN || macs < HAL_BATCHDIST_MIN_MACS)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;   // nothing written yet, the caller can still run
+
+    const int lda = (int)(src1_step / sizeof(float));
+    const int ldb = (int)(src2_step / sizeof(float));
+    const int ldc = (int)(dst_step  / sizeof(float));
+
+    // normL2Sqr_ against a zero vector reuses OpenCV's own NEON kernel, so this part of the
+    // arithmetic stays bit-identical to the path being replaced. Separate cblas_sdot calls per row
+    // would cost more in per-call overhead than they save.
+    cv::AutoBuffer<float> buf((size_t)len + m + n);
+    float* zeros = buf.data();
+    float* rn    = zeros + len;
+    float* cn    = rn + m;
+    memset(zeros, 0, len * sizeof(float));
+    for(int i = 0; i < m; i++)
+        rn[i] = cv::hal::normL2Sqr_(src1 + (size_t)i * lda, zeros, len);
+    for(int j = 0; j < n; j++)
+        cn[j] = cv::hal::normL2Sqr_(src2 + (size_t)j * ldb, zeros, len);
+
+    // CblasTrans on B reads src2 as the n x len array it already is - no repacking. alpha = -2 is
+    // exact. beta = 0 means dst is never read, so an uninitialised output cannot leak in.
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, m, n, len,
+                -2.0f, src1, lda, src2, ldb, 0.0f, dst, ldc);
+
+    // m x n of memory-bound work. Serial, this costs more than the gemm itself at the larger
+    // shapes - 1M elements at 1000x1000 against a 0.28 ms gemm.
+    cv::parallel_for_(cv::Range(0, m), [&](const cv::Range& r)
+    {
+        for(int i = r.start; i < r.end; i++)
+        {
+            float* d = dst + (size_t)i * ldc;
+            const float ri = rn[i];
+            for(int j = 0; j < n; j++)
+            {
+                // (rn + cn) first: both are about 2s, so the cancellation against the cross term
+                // is exact by Sterbenz. Adding the cross term first cancels, then re-rounds the
+                // small result against a large one.
+                float v = (ri + cn[j]) + d[j];
+                // '<= 0' rather than '< 0': -0.0f compares equal to zero and would survive a
+                // '< 0' test, and -0.0f reinterpreted as int is INT_MIN, which sorts below every
+                // real distance in the K-selection loop at batch_distance.cpp:238. NaN fails both
+                // compares and is preserved, which std::max would not do.
+                if(v <= 0.f) v = 0.f;
+                d[j] = v;
+            }
+            // second pass over a row that is now in L1, so the branch stays out of the hot loop
+            if(sqrt_dist)
+                for(int j = 0; j < n; j++)
+                    d[j] = std::sqrt(d[j]);
+        }
+    });
+
+    return CV_HAL_ERROR_OK;
+}
+
+// Null space of many independent 4x4s at once, for cv::triangulatePoints.
+//
+// OpenCV runs hal::SVD64f per point (triangulate.cpp:128) and takes the last row of V. At 4x4 that
+// declines the SVD hook and falls to OpenCV's Jacobi: several sweeps of six rotations, each with a
+// square root - about 20-30 sqrts per point. Householder QR on a 4x4 is four reflections and four
+// sqrts.
+//
+// RRQR gives A P = Q R. For a rank-3 4x4, R(3,3) ~ 0, so with R = [[R11, r12], [0, ~0]] the null
+// space is y = [y1; 1] where R11 y1 = -r12, and x = P y normalised.
+//
+// The interleaved layout and the 0-based pivots below were both confirmed empirically before this
+// was written (armpl_layout_probe.py, armpl_rrqr_probe.py): element (i,j) of matrix l in batch b
+// lives at A_p[b*bstrd + i*istrd + j*jstrd + l], armpl_dge_interleave adds the l itself, and the
+// destination strides must already carry the ninter factor. Residuals came back at 6e-16 even for
+// matrices squeezed to a 1e-9 rank gap, which is the near-degenerate case that worried us.
+int lapack_nullspace4x4Batch64f(const double* src, int count, double* dst)
+{
+#ifndef HAVE_ARMPL
+    (void)src; (void)count; (void)dst;
+    return CV_HAL_ERROR_NOT_IMPLEMENTED;
+#else
+    if(count < HAL_NULLSPACE4X4_MIN_COUNT)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    const armpl_int_t NI = HAL_NULLSPACE4X4_NINTER;
+    const armpl_int_t nbatch = (count + NI - 1) / NI;
+    const armpl_int_t padded = nbatch * NI;
+
+    const armpl_int_t jstrd_A = NI, istrd_A = NI * 4, bstrd_A = NI * 16;
+    const armpl_int_t istrd_v = NI, bstrd_v = NI * 4;                 // jpvt and tau, 4 per matrix
+    const armpl_int_t istrd_B = NI, jstrd_B = NI, bstrd_B = NI * 3;   // the 3x1 rhs
+
+    cv::AutoBuffer<double>     abuf((size_t)bstrd_A * nbatch);
+    cv::AutoBuffer<double>     tbuf((size_t)bstrd_v * nbatch);
+    cv::AutoBuffer<double>     bbuf((size_t)bstrd_B * nbatch);
+    cv::AutoBuffer<armpl_int_t> jbuf((size_t)bstrd_v * nbatch);
+    cv::AutoBuffer<armpl_int_t> rbuf((size_t)padded);
+    double* A_p = abuf.data();
+    double* B_p = bbuf.data();
+    const armpl_int_t* jp = jbuf.data();
+
+    for(armpl_int_t idx = 0; idx < padded; idx++)
+    {
+        const armpl_int_t b = idx / NI, l = idx % NI;
+        // pad by repeating the last real matrix - same conditioning as real data, result discarded
+        const double* M = src + (size_t)(idx < count ? idx : count - 1) * 16;
+        if(armpl_dge_interleave(NI, l, 4, 4, M, 4, 1,
+                                A_p + (size_t)b * bstrd_A, istrd_A, jstrd_A) != ARMPL_STATUS_SUCCESS)
+            return CV_HAL_ERROR_NOT_IMPLEMENTED;
+    }
+
+    if(armpl_dgeqrfrr_interleave_batch(NI, nbatch, 4, 4, A_p, bstrd_A, istrd_A, jstrd_A,
+                                       jbuf.data(), bstrd_v, istrd_v,
+                                       tbuf.data(), bstrd_v, istrd_v,
+                                       rbuf.data()) != ARMPL_STATUS_SUCCESS)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    for(armpl_int_t idx = 0; idx < padded; idx++)
+    {
+        const armpl_int_t b = idx / NI, l = idx % NI;
+        for(int i = 0; i < 3; i++)
+            B_p[(size_t)b * bstrd_B + i * istrd_B + l] =
+                -A_p[(size_t)b * bstrd_A + i * istrd_A + 3 * jstrd_A + l];
+    }
+
+    if(armpl_dtrsm_interleave_batch(NI, nbatch, 'L', 'U', 'N', 'N', 3, 1, 1.0,
+                                    A_p, bstrd_A, istrd_A, jstrd_A,
+                                    B_p, bstrd_B, istrd_B, jstrd_B) != ARMPL_STATUS_SUCCESS)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    // nothing above this point has touched dst, so every decline path is still safe
+    for(int idx = 0; idx < count; idx++)
+    {
+        const armpl_int_t b = idx / NI, l = idx % NI;
+        double y[4] = { 0, 0, 0, 1.0 };
+        for(int i = 0; i < 3; i++)
+            y[i] = B_p[(size_t)b * bstrd_B + i * istrd_B + l];
+
+        double x[4] = { 0, 0, 0, 0 };
+        for(int j = 0; j < 4; j++)
+        {
+            const armpl_int_t k = jp[(size_t)b * bstrd_v + j * istrd_v + l];   // 0-based, verified
+            if(k >= 0 && k < 4)
+                x[k] = y[j];
+        }
+        const double s = std::sqrt(x[0]*x[0] + x[1]*x[1] + x[2]*x[2] + x[3]*x[3]);
+        double* d = dst + (size_t)idx * 4;
+        if(s > 0)
+        {
+            const double inv = 1.0 / s;
+            for(int k = 0; k < 4; k++) d[k] = x[k] * inv;
+        }
+        else
+            for(int k = 0; k < 4; k++) d[k] = x[k];
+    }
+
+    return CV_HAL_ERROR_OK;
+#endif
+}
+
 // syrk computes half the flops of the equivalent gemm because the result is symmetric; it fills
 // one triangle, which is then mirrored. Row major needs no transpose either way.
 template <typename fptype> static inline int
@@ -857,13 +1015,12 @@ lapack_mulTransposed(const fptype* src, size_t src_step, fptype* dst, size_t dst
 {
     const int n = ata ? cols : rows;   // output is n x n
     const int k = ata ? rows : cols;   // contracted dimension
-    if(n < HAL_MULTRANSPOSED_SMALL_MATRIX_THRESH)
-        return CV_HAL_ERROR_NOT_IMPLEMENTED;
 
-    // Gate on work volume, not the output dimension: a 5000x50 input has a 50x50 output but
-    // k=5000 of depth, and threads 4.95x. Keying on n alone gated it and cost a 4.95x win.
+    // Gate on work, not on the output dimension. cv::decolor does mulTransposed on a 9 x 320000
+    // matrix: a 9x9 output but 26 Mflops of work, which an n < 16 test wrongly declined.
     const double work = (double)n * n * k;
-    ArmplSerialScope _ats(work < HAL_MULTRANSPOSED_THREAD_FLOPS ? 0 : 1, 1);
+    if(work < HAL_MULTRANSPOSED_MIN_FLOPS)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
 
     const int lda = (int)(src_step / sizeof(fptype));
     const int ldc = (int)(dst_step / sizeof(fptype));
@@ -920,13 +1077,10 @@ lapack_transform(const fptype* src, fptype* dst, const fptype* m, int len, int s
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
 
     // M=3, K=3 is a poor gemm shape - packing overhead dominates and single-threaded ARMPL loses
-    // to OpenCV's loop (0.69x). It only wins by splitting the long N dimension across threads.
-#if defined(_WIN32)
-    if(!armpl_omp().get_max_threads || armpl_omp().get_max_threads() < 2)
-        return CV_HAL_ERROR_NOT_IMPLEMENTED;
-#else
-    return CV_HAL_ERROR_NOT_IMPLEMENTED;
-#endif
+    // to OpenCV's loop (0.69x). It only wins by splitting the long N dimension across threads, so
+    // this hook is worth having only against the threaded ARMPL (WITH_OPENMP=ON, armpl_lp64_mp).
+    // Built against the serial library it will regress; there is no runtime check for that here
+    // because detecting it meant reaching into ARMPL's own OpenMP runtime, which was removed.
 
     // An offset forces a prefill of dst before gemm can accumulate onto it - two passes against
     // OpenCV's one, measured at 0.35x. There is no single-pass BLAS route (ger instead of the
@@ -1004,6 +1158,18 @@ int lapack_eigen64f(const double* src, size_t src_step, int n, double* evals,
                     double* evects, size_t evects_step, bool* info)
 {
     return lapack_eigen(src, src_step, n, evals, evects, evects_step, info);
+}
+
+int lapack_eigenNonSymmetric32f(const float* src, size_t src_step, int n, float* evals,
+                                float* evects, size_t evects_step, bool* info)
+{
+    return lapack_eigenNonSymmetric(src, src_step, n, evals, evects, evects_step, info);
+}
+
+int lapack_eigenNonSymmetric64f(const double* src, size_t src_step, int n, double* evals,
+                                double* evects, size_t evects_step, bool* info)
+{
+    return lapack_eigenNonSymmetric(src, src_step, n, evals, evects, evects_step, info);
 }
 
 #if defined(__APPLE__) && defined(__clang__)

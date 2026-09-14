@@ -959,6 +959,54 @@ of evals. May be null, in which case only the eigenvalues are computed.
 //! @{
 inline int hal_ni_eigen32f(const float* src, size_t src_step, int n, float* evals, float* evects, size_t evects_step, bool* info) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
 inline int hal_ni_eigen64f(const double* src, size_t src_step, int n, double* evals, double* evects, size_t evects_step, bool* info) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+
+/**
+Eigen decomposition of a general (non-symmetric) matrix. Only the real parts of the eigenvalues are
+written; they are left unsorted, and eigenvector j occupies column j of evects, with a complex
+conjugate pair split across columns j and j+1 as real and imaginary parts.
+@param src pointer to the \f$n \times n\f$ source matrix, stored in row major order.
+@param src_step distance between two subsequent rows of src, in bytes.
+@param n matrix order.
+@param evals pointer to an n element output buffer for the real parts of the eigenvalues.
+@param evects pointer to the \f$n \times n\f$ eigenvector output, or NULL for eigenvalues only.
+@param evects_step distance between two subsequent rows of evects, in bytes.
+@param info set to true on success.
+*/
+inline int hal_ni_eigenNonSymmetric32f(const float* src, size_t src_step, int n, float* evals, float* evects, size_t evects_step, bool* info) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+inline int hal_ni_eigenNonSymmetric64f(const double* src, size_t src_step, int n, double* evals, double* evects, size_t evects_step, bool* info) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+//! @}
+
+//! @addtogroup core_hal_interface_batchDist All-pairs Euclidean distance
+//! @{
+/**
+Squared Euclidean distance between every row of src1 and every row of src2:
+\f$dst_{ij} = \|src1_i - src2_j\|^2\f$, or its square root when sqrt_dist is set. Results are
+clamped to be non-negative, so a caller may compare them as raw integer bit patterns.
+@param src1 pointer to the \f$m \times len\f$ first operand, stored in row major order.
+@param src1_step distance between two subsequent rows of src1, in bytes.
+@param m number of rows in src1.
+@param src2 pointer to the \f$n \times len\f$ second operand, stored in row major order.
+@param src2_step distance between two subsequent rows of src2, in bytes.
+@param n number of rows in src2.
+@param len number of columns of both operands.
+@param dst pointer to the \f$m \times n\f$ output, stored in row major order.
+@param dst_step distance between two subsequent rows of dst, in bytes.
+@param sqrt_dist when true the square root is applied to every element of dst.
+*/
+inline int hal_ni_batchDistL2Sqr32f(const float* src1, size_t src1_step, int m, const float* src2, size_t src2_step, int n, int len, float* dst, size_t dst_step, bool sqrt_dist) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+//! @}
+
+//! @addtogroup core_hal_interface_nullspace Batched small null space
+//! @{
+/**
+Unit null vector of each of count independent 4x4 matrices, for the homogeneous system
+\f$A^{(i)} x^{(i)} = 0\f$. Intended for triangulation, where the matrices are rank 3 by
+construction. The sign of each vector is arbitrary, as it is for any null space.
+@param src pointer to count consecutive 4x4 matrices, each stored packed and row major.
+@param count number of matrices.
+@param dst pointer to count consecutive 4-element unit vectors, packed.
+*/
+inline int hal_ni_nullspace4x4Batch64f(const double* src, int count, double* dst) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
 //! @}
 
 /**
@@ -980,6 +1028,36 @@ inline int hal_ni_mulTransposed32f(const float* src, size_t src_step, float* dst
 inline int hal_ni_mulTransposed64f(const double* src, size_t src_step, double* dst, size_t dst_step, int rows, int cols, bool ata, double scale) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
 //! @}
 
+/**
+\f$dst = alpha \cdot src1 + src2\f$ over len contiguous elements.
+*/
+//! @addtogroup core_hal_interface_scaleAdd Scaled vector addition
+//! @{
+inline int hal_ni_scaleAdd32f(const float* src1, const float* src2, float* dst, int len, float alpha) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+inline int hal_ni_scaleAdd64f(const double* src1, const double* src2, double* dst, int len, double alpha) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+//! @}
+
+/**
+Mahalanobis distance \f$\sqrt{(v1-v2)^T \cdot icovar \cdot (v1-v2)}\f$, matching what
+cv::Mahalanobis returns. v1 and v2 are contiguous len-element vectors.
+@param result receives the distance, square root already applied.
+*/
+//! @addtogroup core_hal_interface_Mahalanobis Mahalanobis distance
+//! @{
+inline int hal_ni_Mahalanobis64f(const double* v1, const double* v2, const double* icovar, size_t icovar_step, int len, double* result) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+//! @}
+
+/**
+Apply an affine transform to every element of an interleaved array: for each of len elements,
+$dst_i = M \cdot src_i + t$. src holds len elements of scn channels, dst len of dcn channels,
+both interleaved. m is a row-major dcn x (scn+1) matrix whose final column is the offset t.
+*/
+//! @addtogroup core_hal_interface_transform Per-element affine transform
+//! @{
+inline int hal_ni_transform32f(const float* src, float* dst, const float* m, int len, int scn, int dcn) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+inline int hal_ni_transform64f(const double* src, double* dst, const double* m, int len, int scn, int dcn) { return CV_HAL_ERROR_NOT_IMPLEMENTED; }
+//! @}
+
 //! @cond IGNORED
 #define cv_hal_LU32f hal_ni_LU32f
 #define cv_hal_LU64f hal_ni_LU64f
@@ -991,8 +1069,17 @@ inline int hal_ni_mulTransposed64f(const double* src, size_t src_step, double* d
 #define cv_hal_QR64f hal_ni_QR64f
 #define cv_hal_eigen32f hal_ni_eigen32f
 #define cv_hal_eigen64f hal_ni_eigen64f
+#define cv_hal_eigenNonSymmetric32f hal_ni_eigenNonSymmetric32f
+#define cv_hal_eigenNonSymmetric64f hal_ni_eigenNonSymmetric64f
+#define cv_hal_batchDistL2Sqr32f hal_ni_batchDistL2Sqr32f
+#define cv_hal_nullspace4x4Batch64f hal_ni_nullspace4x4Batch64f
 #define cv_hal_mulTransposed32f hal_ni_mulTransposed32f
 #define cv_hal_mulTransposed64f hal_ni_mulTransposed64f
+#define cv_hal_scaleAdd32f hal_ni_scaleAdd32f
+#define cv_hal_scaleAdd64f hal_ni_scaleAdd64f
+#define cv_hal_Mahalanobis64f hal_ni_Mahalanobis64f
+#define cv_hal_transform32f hal_ni_transform32f
+#define cv_hal_transform64f hal_ni_transform64f
 //! @endcond
 
 

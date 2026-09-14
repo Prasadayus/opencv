@@ -69,6 +69,14 @@ CV_EXPORTS void SVD64f(double* At, size_t astep, double* W, double* U, size_t us
 CV_EXPORTS int QR32f(float* A, size_t astep, int m, int n, int k, float* b, size_t bstep, float* hFactors);
 CV_EXPORTS int QR64f(double* A, size_t astep, int m, int n, int k, double* b, size_t bstep, double* hFactors);
 
+/** @brief Unit null vector of each of count independent 4x4 systems \f$A^{(i)} x^{(i)} = 0\f$.
+
+For callers that would otherwise run a 4x4 SVD per element, which is far below the size at which
+the SVD hook engages. @p src holds count packed row-major 4x4 matrices, @p dst receives count
+packed 4-vectors. The sign of each vector is arbitrary, as it is for any null space.
+@return false if no acceleration is available, in which case dst is untouched. */
+CV_EXPORTS bool nullspace4x4Batch64f(const double* src, int count, double* dst);
+
 CV_EXPORTS void gemm32f(const float* src1, size_t src1_step, const float* src2, size_t src2_step,
                         float alpha, const float* src3, size_t src3_step, float beta, float* dst, size_t dst_step,
                         int m_a, int n_a, int n_d, int flags);

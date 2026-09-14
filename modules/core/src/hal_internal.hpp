@@ -102,10 +102,41 @@ int lapack_eigen32f(const float* src, size_t src_step, int n, float* evals,
 int lapack_eigen64f(const double* src, size_t src_step, int n, double* evals,
                     double* evects, size_t evects_step, bool* info);
 
+int lapack_eigenNonSymmetric32f(const float* src, size_t src_step, int n, float* evals,
+                                float* evects, size_t evects_step, bool* info);
+int lapack_eigenNonSymmetric64f(const double* src, size_t src_step, int n, double* evals,
+                                double* evects, size_t evects_step, bool* info);
+
+int lapack_batchDistL2Sqr32f(const float* src1, size_t src1_step, int m,
+                             const float* src2, size_t src2_step, int n,
+                             int len, float* dst, size_t dst_step, bool sqrt_dist);
+
+int lapack_nullspace4x4Batch64f(const double* src, int count, double* dst);
+
 int lapack_mulTransposed32f(const float* src, size_t src_step, float* dst, size_t dst_step,
                             int rows, int cols, bool ata, double scale);
 int lapack_mulTransposed64f(const double* src, size_t src_step, double* dst, size_t dst_step,
                             int rows, int cols, bool ata, double scale);
+
+int lapack_scaleAdd32f(const float* src1, const float* src2, float* dst, int len, float alpha);
+int lapack_scaleAdd64f(const double* src1, const double* src2, double* dst, int len, double alpha);
+int lapack_Mahalanobis64f(const double* v1, const double* v2, const double* icovar,
+                          size_t icovar_step, int len, double* result);
+
+int lapack_transform32f(const float* src, float* dst, const float* m, int len, int scn, int dcn);
+int lapack_transform64f(const double* src, double* dst, const double* m, int len, int scn, int dcn);
+
+#undef cv_hal_transform32f
+#define cv_hal_transform32f lapack_transform32f
+#undef cv_hal_transform64f
+#define cv_hal_transform64f lapack_transform64f
+
+#undef cv_hal_scaleAdd32f
+#define cv_hal_scaleAdd32f lapack_scaleAdd32f
+#undef cv_hal_scaleAdd64f
+#define cv_hal_scaleAdd64f lapack_scaleAdd64f
+#undef cv_hal_Mahalanobis64f
+#define cv_hal_Mahalanobis64f lapack_Mahalanobis64f
 
 #undef cv_hal_mulTransposed32f
 #define cv_hal_mulTransposed32f lapack_mulTransposed32f
@@ -116,6 +147,17 @@ int lapack_mulTransposed64f(const double* src, size_t src_step, double* dst, siz
 #define cv_hal_eigen32f lapack_eigen32f
 #undef cv_hal_eigen64f
 #define cv_hal_eigen64f lapack_eigen64f
+
+#undef cv_hal_eigenNonSymmetric32f
+#define cv_hal_eigenNonSymmetric32f lapack_eigenNonSymmetric32f
+#undef cv_hal_eigenNonSymmetric64f
+#define cv_hal_eigenNonSymmetric64f lapack_eigenNonSymmetric64f
+
+#undef cv_hal_batchDistL2Sqr32f
+#define cv_hal_batchDistL2Sqr32f lapack_batchDistL2Sqr32f
+
+#undef cv_hal_nullspace4x4Batch64f
+#define cv_hal_nullspace4x4Batch64f lapack_nullspace4x4Batch64f
 
 #endif //HAVE_LAPACK
 #endif //OPENCV_CORE_HAL_INTERNAL_HPP
