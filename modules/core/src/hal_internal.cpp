@@ -68,8 +68,9 @@
 #define HAL_GEMM_SMALL_MATRIX_THRESH 100
 #define HAL_SVD_SMALL_MATRIX_THRESH 25
 #define HAL_QR_SMALL_MATRIX_THRESH 30
-#define HAL_LU_SMALL_MATRIX_THRESH 100
-#define HAL_CHOLESKY_SMALL_MATRIX_THRESH 100
+#define HAL_LU_SMALL_MATRIX_THRESH 100            // non-ARMPL only, see lapack_factor_too_small
+#define HAL_CHOLESKY_SMALL_MATRIX_THRESH 100      // non-ARMPL only, see lapack_factor_too_small
+#define HAL_FACTOR_MIN_FLOPS 1.5e6                // m^3 + m^2*n, see lapack_factor_too_small
 #define HAL_EIGEN_SMALL_MATRIX_THRESH 16
 #define HAL_EIGEN_VECTORS_MATRIX_THRESH 48
 #define HAL_EIGEN_NONSYM_SMALL_MATRIX_THRESH 16   // provisional, set from the measurement
@@ -78,9 +79,10 @@
                                                   // the 1/len term never improves with size
 #define HAL_NULLSPACE4X4_MIN_COUNT 64             // provisional, set from the measurement
 #define HAL_NULLSPACE4X4_NINTER 4                 // small multiple of the f64 vector length (2)
-#define HAL_MULTRANSPOSED_MIN_FLOPS 4096.0   // was: output dim < 16, i.e. 16^3 square
+#define HAL_MULTRANSPOSED_MIN_FLOPS 4096.0
+#define HAL_MULTRANSPOSED_MIN_DIM 16
 #define HAL_SCALEADD_SMALL_THRESH 64
-#define HAL_MAHALANOBIS_SMALL_THRESH 16
+#define HAL_MAHALANOBIS_SMALL_THRESH 512          // 0.46-0.92x at len 32-256, 3.31x at 512
 #define HAL_TRANSFORM_SMALL_THRESH 256
 
 #if defined(__clang__) && defined(__has_feature)
@@ -634,30 +636,46 @@ lapack_gemm_c(const fptype *src1, size_t src1_step, const fptype *src2, size_t s
 
     return CV_HAL_ERROR_OK;
 }
+// determinant (n=0 right-hand sides), solve (n=1) and invert (n=m) share these two gates and behave
+// differently at the same m: at m=100 they measured 0.43x, 0.12x and 2.96x. A test on m alone has to
+// get one of them wrong, so gate on the work. Every measured point is reproduced by any value in
+// (1.01e6, 2.0e6] - it declines determinant and solve at m=100 and admits invert, and it declines
+// every m=31 and m=64 case while admitting every m=256 one. 1.5e6 sits in the middle of that gap.
+static inline bool lapack_factor_too_small(int m, int n, int small_thresh)
+{
+#ifdef HAVE_ARMPL
+    CV_UNUSED(small_thresh);
+    return (double)m * m * m + (double)m * m * n < HAL_FACTOR_MIN_FLOPS;
+#else
+    CV_UNUSED(n);
+    return m < small_thresh;      // upstream's rule, tuned for OpenBLAS and MKL; left alone
+#endif
+}
+
 int lapack_LU32f(float* a, size_t a_step, int m, float* b, size_t b_step, int n, int* info)
 {
-    if(m < HAL_LU_SMALL_MATRIX_THRESH)
+    if(lapack_factor_too_small(m, n, HAL_LU_SMALL_MATRIX_THRESH))
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
     return lapack_LU(a, a_step, m, b, b_step, n, info);
 }
 
 int lapack_LU64f(double* a, size_t a_step, int m, double* b, size_t b_step, int n, int* info)
 {
-    if(m < HAL_LU_SMALL_MATRIX_THRESH)
+    if(lapack_factor_too_small(m, n, HAL_LU_SMALL_MATRIX_THRESH))
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
     return lapack_LU(a, a_step, m, b, b_step, n, info);
 }
 
 int lapack_Cholesky32f(float* a, size_t a_step, int m, float* b, size_t b_step, int n, bool *info)
 {
-    if(m < HAL_CHOLESKY_SMALL_MATRIX_THRESH)
+    if(lapack_factor_too_small(m, n, HAL_CHOLESKY_SMALL_MATRIX_THRESH))
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
     return lapack_Cholesky(a, a_step, m, b, b_step, n, info);
 }
 
 int lapack_Cholesky64f(double* a, size_t a_step, int m, double* b, size_t b_step, int n, bool *info)
 {
-    if(m < HAL_CHOLESKY_SMALL_MATRIX_THRESH)
+    if(lapack_factor_too_small(m, n, HAL_CHOLESKY_SMALL_MATRIX_THRESH))
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
     return lapack_Cholesky(a, a_step, m, b, b_step, n, info);
 }
@@ -1016,10 +1034,11 @@ lapack_mulTransposed(const fptype* src, size_t src_step, fptype* dst, size_t dst
     const int n = ata ? cols : rows;   // output is n x n
     const int k = ata ? rows : cols;   // contracted dimension
 
-    // Gate on work, not on the output dimension. cv::decolor does mulTransposed on a 9 x 320000
-    // matrix: a 9x9 output but 26 Mflops of work, which an n < 16 test wrongly declined.
+    // Both tests are needed. Work alone admitted cv::decolor (9x9 out, 26 Mflops) and fitEllipse
+    // (6x6 out, 32768 deep), measured at 0.87x and 0.40x: syrk has no parallelism in a tiny output
+    // and depth does not compensate. A 50x50 output wins 4.90x, so the floor is between 9 and 50.
     const double work = (double)n * n * k;
-    if(work < HAL_MULTRANSPOSED_MIN_FLOPS)
+    if(n < HAL_MULTRANSPOSED_MIN_DIM || work < HAL_MULTRANSPOSED_MIN_FLOPS)
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
 
     const int lda = (int)(src_step / sizeof(fptype));
