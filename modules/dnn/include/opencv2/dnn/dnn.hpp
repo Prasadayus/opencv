@@ -1605,7 +1605,8 @@ CV__DNN_INLINE_NS_BEGIN
 
          /** @brief Set the image padding mode used when resizing the frame to the network input size.
           *  @param[in] mode Padding mode, @see ImagePaddingMode. Defaults to DNN_PMODE_NULL.
-          *  @note DNN_PMODE_LETTERBOX takes priority over setInputCrop(true); needed for YOLOv8-family exports.
+          *  @note This, setInputCrop() and setInputParams() all write the same setting, so the
+          *  last call wins. YOLOv8-family exports expect DNN_PMODE_LETTERBOX.
          */
          CV_WRAP Model& setPaddingMode(ImagePaddingMode mode);
 
@@ -1632,7 +1633,8 @@ CV__DNN_INLINE_NS_BEGIN
          CV_WRAP void predict(InputArray frame, OutputArrayOfArrays outs) const;
 
          /** @overload
-          *  @param[in]  frames The input images. They must share one size and type.
+          *  @param[in]  frames The input images. They must share one type; sizes may differ,
+          *  each is resized to the network input size.
           *  @param[out] outs Allocated output blobs. The images are run as one batch, so each
           *  blob carries them in its first dimension.
           */
@@ -1721,7 +1723,8 @@ CV__DNN_INLINE_NS_BEGIN
 
          /** @brief Given a batch of @p frames, run net once and return the top-1 prediction
           *  of each of them.
-          *  @param[in]  frames The input images. They must share one size and type.
+          *  @param[in]  frames The input images. They must share one type; sizes may differ,
+          *  each is resized to the network input size.
           *  @param[out] classIds Top-1 class index per image.
           *  @param[out] confs Confidence of the top-1 class per image.
           */
@@ -1762,7 +1765,8 @@ CV__DNN_INLINE_NS_BEGIN
 
          /** @brief Given a batch of @p frames, run net once and return the keypoints of each
           *  of them.
-          *  @param[in]  frames The input images. They must share one size and type.
+          *  @param[in]  frames The input images. They must share one type; sizes may differ,
+          *  each is resized to the network input size.
           *  @param[out] keypoints x and y coordinates of each detected keypoint, per image
           *  @param thresh minimum confidence threshold to select a keypoint
           */
@@ -1791,7 +1795,8 @@ CV__DNN_INLINE_NS_BEGIN
                                      float confThreshold = 0.5f, float nmsThreshold = 0.45f);
 
          /** @overload
-          *  @param[in]  frames The input images. They must share one size and type.
+          *  @param[in]  frames The input images. They must share one type; sizes may differ,
+          *  each is resized to the network input size.
           *  @param[out] keypoints One entry per detected person across all images.
           *  @param[out] boxes Per-person bounding boxes, parallel to @p keypoints.
           *  @param[out] confidences Person-detection confidences, parallel to @p keypoints.
@@ -1839,7 +1844,8 @@ CV__DNN_INLINE_NS_BEGIN
 
          /** @brief Given a batch of @p frames, run net once and return the class prediction
           *  of every pixel of each of them.
-          *  @param[in]  frames The input images. They must share one size and type.
+          *  @param[in]  frames The input images. They must share one type; sizes may differ,
+          *  each is resized to the network input size.
           *  @param[out] masks Allocated class prediction for each pixel, one mask per input image.
           */
          CV_WRAP void segment(InputArrayOfArrays frames, CV_OUT std::vector<Mat>& masks);
@@ -1867,7 +1873,8 @@ CV__DNN_INLINE_NS_BEGIN
                                         float confThreshold = 0.5f, float nmsThreshold = 0.45f);
 
          /** @overload
-          *  @param[in]  frames The input images. They must share one size and type.
+          *  @param[in]  frames The input images. They must share one type; sizes may differ,
+          *  each is resized to the network input size.
           *  @param[out] masks One binary mask per detection across all images, each sized to its
           *  corresponding entry in @p boxes.
           *  @param[out] classIds Class indexes, parallel to @p masks.
@@ -1951,7 +1958,8 @@ CV__DNN_INLINE_NS_BEGIN
                              float confThreshold = 0.5f, float nmsThreshold = 0.45f);
 
          /** @overload
-          *  @param[in]  frames The input images. They must share one size and type.
+          *  @param[in]  frames The input images. They must share one type; sizes may differ,
+          *  each is resized to the network input size.
           *  @param[out] classIds Class indexes of every detection across all images.
           *  @param[out] confidences Confidences, parallel to @p classIds.
           *  @param[out] boxes Bounding boxes, parallel to @p classIds.
