@@ -930,6 +930,18 @@ public:
             src.getMat().convertTo(tmp, CV_64FC1);
             // Get dimension of the matrix.
             this->n = tmp.cols;
+
+            // geev does orthes()+hqr2() in one call, on contiguous storage rather than the
+            // ragged double** below, and leaves the same unsorted values / column vectors
+            {
+                bool hal_ok = false;
+                _eigenvalues.create(1, n, CV_64FC1);
+                _eigenvectors.create(n, n, CV_64FC1);
+                CALL_HAL(eigenNonSymmetric64f, cv_hal_eigenNonSymmetric64f,
+                         tmp.ptr<double>(), tmp.step, n, _eigenvalues.ptr<double>(),
+                         _eigenvectors.ptr<double>(), _eigenvectors.step, &hal_ok);
+            }
+
             // Allocate the matrix data to work on.
             this->H = alloc_2d<double> (n, n);
             // Now safely copy the data.
