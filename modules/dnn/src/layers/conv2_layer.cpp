@@ -101,59 +101,58 @@ public:
         if (ngroups == K && Cg == 1) {
             // depthwise: C1 x ksize x C0, and the input channel is the output channel
             const int ksize = ws[1], C0 = ws[2];
-            for (int ch = 0; ch < K; ch++) {
-                float* w = W + (size_t)(ch / C0) * ksize * C0 + (ch % C0);
-                float sw = 0.f;
-                for (int i = 0; i < ksize; i++) {
-                    sw += w[(size_t)i * C0];
-                    w[(size_t)i * C0] *= sc[ch];
-                }
-                adj[ch] += sh[ch] * sw;
-            }
-        } else {
-            // dense: the offsets are repackConvWeights()'s, which this layer packed with
-            const int Kblk = ws[1], ksize = ws[2], C1Max = ws[3];
-            const int C0 = packC0, K0 = C0, Kg = K / ngroups;
-            const size_t sstride = (size_t)C1Max * C0 * K0;
-            for (int k = 0; k < K; k++) {
-                const int g = k / Kg, kin = k - g * Kg;
-                const int kblk = kin / K0, k0 = kin & (K0 - 1);
-                const int c00 = (g * Cg) & (C0 - 1);
-                for (int c = 0; c < Cg; c++) {
-                    const int ch = c00 + c, c1 = ch / C0, c0 = ch & (C0 - 1);
-                    float* w = W + ((((size_t)(g * Kblk + kblk) * ksize + 0) * C1Max + c1) * C0
-                                    + c0) * K0 + k0;
+            parallel_for_(Range(0, K), [&](const Range& r) {
+                for (int ch = r.start; ch < r.end; ch++) {
+                    float* w = W + (size_t)(ch / C0) * ksize * C0 + (ch % C0);
                     float sw = 0.f;
                     for (int i = 0; i < ksize; i++) {
-                        sw += w[i * sstride];
-                        w[i * sstride] *= sc[g * Cg + c];
+                        sw += w[(size_t)i * C0];
+                        w[(size_t)i * C0] *= sc[ch];
                     }
-                    if (!plain.empty())
-                        plain.ptr<float>(k)[c] = w[0];  // ksize == 1 whenever MLAS armed
-                    adj[k] += sh[g * Cg + c] * sw;
+                    adj[ch] += sh[ch] * sw;
                 }
-            }
+            }, (size_t)K*ksize > kFoldParallelMin ? K : 1);
+        } else {
+            const ConvWeightPack pack = ConvWeightPack::forConv(wshape0, ws, ngroups, packC0);
+            const int ksize = pack.ksize;
+            const size_t sstride = pack.tapStride();
+            parallel_for_(Range(0, K), [&](const Range& r) {
+                for (int k = r.start; k < r.end; k++) {
+                    const int cbase = (k / pack.Kg) * Cg;  // first input channel of k's group
+                    for (int c = 0; c < Cg; c++) {
+                        float* w = W + pack.offset(k, c);
+                        float sw = 0.f;
+                        for (int i = 0; i < ksize; i++) {
+                            sw += w[i * sstride];
+                            w[i * sstride] *= sc[cbase + c];
+                        }
+                        if (!plain.empty())
+                            plain.ptr<float>(k)[c] = w[0];  // ksize == 1 whenever MLAS armed
+                        adj[k] += sh[cbase + c] * sw;
+                    }
+                }
+            }, (size_t)K*Cg*ksize > kFoldParallelMin ? K : 1);
         }
 
         if (!plain.empty() &&
             !mlasSgemmPackB(false, true, K, Cg, plain.ptr<float>(), Cg, mlas_packed_B_.data))
             mlas_packed_B_.release();
 
-#ifdef HAVE_CUDA
         // The CUDA path reads this plain copy instead of the packed one.
         if (!origWeights.empty() && origWeights.type() == CV_32F) {
             Mat w2d = origWeights.reshape(1, K);
             const int Kg = K / ngroups, inner = (int)(origWeights.total() / ((size_t)K * Cg));
-            for (int k = 0; k < K; k++) {
-                float* row = w2d.ptr<float>(k);
-                for (int c = 0; c < Cg; c++) {
-                    float* wc = row + (size_t)c * inner;
-                    for (int i = 0; i < inner; i++)
-                        wc[i] *= sc[(k / Kg) * Cg + c];
+            parallel_for_(Range(0, K), [&](const Range& r) {
+                for (int k = r.start; k < r.end; k++) {
+                    float* row = w2d.ptr<float>(k);
+                    for (int c = 0; c < Cg; c++) {
+                        float* wc = row + (size_t)c * inner;
+                        for (int i = 0; i < inner; i++)
+                            wc[i] *= sc[(k / Kg) * Cg + c];
+                    }
                 }
-            }
+            }, (size_t)K*Cg*inner > kFoldParallelMin ? K : 1);
         }
-#endif
 
         if (bias.empty()) {
             bias.fit(1, &K, CV_32F);
