@@ -330,6 +330,20 @@ void hal::SVD64f(double* At, size_t astep, double* W, double* U, size_t ustep, d
         CV_CPU_DISPATCH_MODES_ALL);
 }
 
+// There is no generic fallback here on purpose: the caller already has a per-element path that is
+// correct, and duplicating it would be a second implementation to keep in step. Returning false
+// means "nothing was written, run your own loop".
+bool hal::nullspace4x4Batch64f(const double* src, int count, double* dst)
+{
+    int res = cv_hal_nullspace4x4Batch64f(src, count, dst);
+    if( res == CV_HAL_ERROR_OK )
+        return true;
+    if( res != CV_HAL_ERROR_NOT_IMPLEMENTED )
+        CV_Error_(cv::Error::StsInternal,
+                  ("HAL implementation nullspace4x4Batch64f returned %d (0x%08x)", res, res));
+    return false;
+}
+
 /* y[0:m,0:n] += diag(a[0:1,0:m]) * x[0:m,0:n] */
 template<typename T1, typename T2, typename T3> static void
 MatrAXPY( int m, int n, const T1* x, int dx,
@@ -429,6 +443,8 @@ SVBkSb( int m, int n, const float* w, size_t wstep,
         const float* b, size_t bstep, int nb,
         float* x, size_t xstep, uchar* buffer )
 {
+    CALL_HAL(SVBkSb32f, cv_hal_SVBkSb32f, m, n, w, wstep, u, ustep, uT, v, vstep, vT,
+             b, bstep, nb, x, xstep)
     SVBkSbImpl_(m, n, w, wstep ? (int)(wstep/sizeof(w[0])) : 1,
                 u, (int)(ustep/sizeof(u[0])), uT,
                 v, (int)(vstep/sizeof(v[0])), vT,
@@ -444,6 +460,8 @@ SVBkSb( int m, int n, const double* w, size_t wstep,
        const double* b, size_t bstep, int nb,
        double* x, size_t xstep, uchar* buffer )
 {
+    CALL_HAL(SVBkSb64f, cv_hal_SVBkSb64f, m, n, w, wstep, u, ustep, uT, v, vstep, vT,
+             b, bstep, nb, x, xstep)
     SVBkSbImpl_(m, n, w, wstep ? (int)(wstep/sizeof(w[0])) : 1,
                 u, (int)(ustep/sizeof(u[0])), uT,
                 v, (int)(vstep/sizeof(v[0])), vT,
@@ -1093,6 +1111,18 @@ bool eigen( InputArray _src, OutputArray _evals, OutputArray _evects )
     {
         _evects.create(n, n, type);
         v = _evects.getMat();
+    }
+
+    {
+        _evals.create(n, 1, type);
+        Mat w_ = _evals.getMat();
+        bool hal_ok = false;
+        if( type == CV_32F )
+            CALL_HAL_RET(eigen32f, cv_hal_eigen32f, hal_ok, src.ptr<float>(), src.step, n,
+                         w_.ptr<float>(), v.empty() ? (float*)0 : v.ptr<float>(), v.step)
+        else
+            CALL_HAL_RET(eigen64f, cv_hal_eigen64f, hal_ok, src.ptr<double>(), src.step, n,
+                         w_.ptr<double>(), v.empty() ? (double*)0 : v.ptr<double>(), v.step)
     }
 
 #ifdef HAVE_EIGEN
