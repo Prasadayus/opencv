@@ -438,10 +438,18 @@ void cv::pyrMeanShiftFiltering( InputArray _src, OutputArray _dst,
         dptr = dst_pyramid[level].ptr();
         dstep = (int)dst_pyramid[level].step;
 
-        for( i = 0; i < size.height; i++, sptr += sstep - size.width*3,
-                                          dptr += dstep - size.width*3
-        )
+        // Rows are independent: the mean-shift window reads only the source image and each
+        // pixel writes only its own destination pixel. Pointers are derived from the row
+        // index rather than carried across iterations so the loop can be split.
+        const uchar* const sptr0 = sptr;
+        uchar* const dptr0 = dptr;
+        parallel_for_(Range(0, size.height), [&](const Range& range)
         {
+        int i, j;
+        for( i = range.start; i < range.end; i++ )
+        {
+            const uchar* sptr = sptr0 + (size_t)i*sstep;
+            uchar* dptr = dptr0 + (size_t)i*dstep;
             uchar* mask = m.empty() ? NULL : m.ptr(i);
             for( j = 0; j < size.width; j++, sptr += 3, dptr += 3 )
             {
@@ -542,5 +550,6 @@ void cv::pyrMeanShiftFiltering( InputArray _src, OutputArray _dst,
                 dptr[2] = (uchar)c2;
             }
         }
+        }, (double)size.height*size.width/(1<<13));
     }
 }
