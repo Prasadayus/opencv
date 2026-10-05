@@ -42,6 +42,7 @@
 
 #include "precomp.hpp"
 #include "opencl_kernels_imgproc.hpp"
+#include "opencv2/core/hal/intrin.hpp"
 
 // ----------------------------------------------------------------------
 // CLAHE
@@ -300,7 +301,37 @@ namespace
             const T* lutPlane1 = lut_.ptr<T>(ty1 * tilesX_);
             const T* lutPlane2 = lut_.ptr<T>(ty2 * tilesX_);
 
-            for (int x = 0; x < src_.cols; ++x)
+            int x = 0;
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+            // LUT reads stay scalar - no NEON gather - but the bilinear maths vectorises
+            {
+                using namespace cv;   // intrinsics live in cv, this file does not
+                const int vl = VTraits<v_float32>::vlanes();
+                const v_float32 v_ya = vx_setall_f32(ya), v_ya1 = vx_setall_f32(ya1);
+                float l1a[VTraits<v_float32>::max_nlanes], l1b[VTraits<v_float32>::max_nlanes];
+                float l2a[VTraits<v_float32>::max_nlanes], l2b[VTraits<v_float32>::max_nlanes];
+                int ri[VTraits<v_int32>::max_nlanes];
+
+                for (; x <= src_.cols - vl; x += vl)
+                {
+                    for (int l = 0; l < vl; ++l)
+                    {
+                        int sv = srcRow[x+l] >> shift_;
+                        int i1 = ind1_p[x+l] + sv, i2 = ind2_p[x+l] + sv;
+                        l1a[l] = (float)lutPlane1[i1]; l1b[l] = (float)lutPlane1[i2];
+                        l2a[l] = (float)lutPlane2[i1]; l2b[l] = (float)lutPlane2[i2];
+                    }
+                    v_float32 xa = vx_load(xa_p + x), xa1 = vx_load(xa1_p + x);
+                    v_float32 r =
+                        v_add(v_mul(v_add(v_mul(vx_load(l1a), xa1), v_mul(vx_load(l1b), xa)), v_ya1),
+                              v_mul(v_add(v_mul(vx_load(l2a), xa1), v_mul(vx_load(l2b), xa)), v_ya));
+                    v_store(ri, v_round(r));
+                    for (int l = 0; l < vl; ++l)
+                        dstRow[x+l] = (T)(cv::saturate_cast<T>(ri[l]) << shift_);
+                }
+            }
+#endif
+            for (; x < src_.cols; ++x)
             {
                 int srcVal = srcRow[x] >> shift_;
 
