@@ -44,7 +44,8 @@ if(WITH_NEON)
     target_compile_definitions(carotene_objs PRIVATE "-DWITH_NEON")
 endif()
 
- if(MINGW)
+ if(WIN32)
+    # phase.cpp needs M_PI, first compiled now that clang defines __ARM_NEON and enables CAROTENE_NEON
     target_compile_definitions(carotene_objs PRIVATE "-D_USE_MATH_DEFINES=1")
  endif()
 

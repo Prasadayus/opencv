@@ -320,7 +320,8 @@ if(MSVC)
     set(OPENCV_EXTRA_CXX_FLAGS "${OPENCV_EXTRA_CXX_FLAGS} /FS")
   endif()
 
-  if(AARCH64 AND NOT MSVC_VERSION LESS 1930)
+  # clang-cl reports itself as MSVC but uses its own <arm_neon.h>, where this macro breaks vgetq_lane_*
+  if(AARCH64 AND NOT MSVC_VERSION LESS 1930 AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(OPENCV_EXTRA_FLAGS "${OPENCV_EXTRA_FLAGS} /D _ARM64_DISTINCT_NEON_TYPES")
   endif()
 endif()

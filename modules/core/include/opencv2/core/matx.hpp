@@ -69,13 +69,13 @@ CV__DEBUG_NS_END
 
 //! @cond IGNORED
 // FIXIT Remove this (especially CV_EXPORTS modifier)
-struct CV_EXPORTS Matx_AddOp { Matx_AddOp() {} Matx_AddOp(const Matx_AddOp&) {} };
-struct CV_EXPORTS Matx_SubOp { Matx_SubOp() {} Matx_SubOp(const Matx_SubOp&) {} };
-struct CV_EXPORTS Matx_ScaleOp { Matx_ScaleOp() {} Matx_ScaleOp(const Matx_ScaleOp&) {} };
-struct CV_EXPORTS Matx_MulOp { Matx_MulOp() {} Matx_MulOp(const Matx_MulOp&) {} };
-struct CV_EXPORTS Matx_DivOp { Matx_DivOp() {} Matx_DivOp(const Matx_DivOp&) {} };
-struct CV_EXPORTS Matx_MatMulOp { Matx_MatMulOp() {} Matx_MatMulOp(const Matx_MatMulOp&) {} };
-struct CV_EXPORTS Matx_TOp { Matx_TOp() {} Matx_TOp(const Matx_TOp&) {} };
+struct CV_EXPORTS Matx_AddOp { Matx_AddOp() {} };
+struct CV_EXPORTS Matx_SubOp { Matx_SubOp() {} };
+struct CV_EXPORTS Matx_ScaleOp { Matx_ScaleOp() {} };
+struct CV_EXPORTS Matx_MulOp { Matx_MulOp() {} };
+struct CV_EXPORTS Matx_DivOp { Matx_DivOp() {} };
+struct CV_EXPORTS Matx_MatMulOp { Matx_MatMulOp() {} };
+struct CV_EXPORTS Matx_TOp { Matx_TOp() {} };
 //! @endcond
 
 ////////////////////////////// Small Matrix ///////////////////////////
