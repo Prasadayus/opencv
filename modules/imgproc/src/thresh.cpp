@@ -1762,6 +1762,39 @@ double cv::thresholdWithMask( InputArray _src, InputOutputArray _dst, InputArray
 }
 
 
+namespace cv { namespace {
+
+// The old 768-entry LUT was tab[s - m + 255] with tab[i] = (i - 255 > -idelta), i.e. just
+// (s - m > -idelta) - so compare directly instead of a per-pixel dependent load.
+void adaptiveThresholdRow( const uchar* sdata, const uchar* mdata, uchar* ddata, int width,
+                           int idelta, uchar imaxval, bool inv )
+{
+    int j = 0;
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+    const int vl = VTraits<v_uint8>::vlanes();
+    const v_int16 vdelta = vx_setall_s16((short)(-idelta));
+    const v_int16 vmax = vx_setall_s16((short)imaxval), vzero = vx_setzero_s16();
+    const v_int16 vtrue = inv ? vzero : vmax, vfalse = inv ? vmax : vzero;
+    for( ; j <= width - vl; j += vl )
+    {
+        v_uint16 s0, s1, m0, m1;
+        v_expand(vx_load(sdata + j), s0, s1);
+        v_expand(vx_load(mdata + j), m0, m1);
+        v_int16 d0 = v_sub(v_reinterpret_as_s16(s0), v_reinterpret_as_s16(m0));
+        v_int16 d1 = v_sub(v_reinterpret_as_s16(s1), v_reinterpret_as_s16(m1));
+        v_store(ddata + j, v_pack_u(v_select(v_gt(d0, vdelta), vtrue, vfalse),
+                                    v_select(v_gt(d1, vdelta), vtrue, vfalse)));
+    }
+#endif
+    for( ; j < width; j++ )
+    {
+        int d = (int)sdata[j] - (int)mdata[j];
+        ddata[j] = (inv ? d <= -idelta : d > -idelta) ? imaxval : 0;
+    }
+}
+
+}}
+
 void cv::adaptiveThreshold( InputArray _src, OutputArray _dst, double maxValue,
                             int method, int type, int blockSize, double delta )
 {
@@ -1803,33 +1836,18 @@ void cv::adaptiveThreshold( InputArray _src, OutputArray _dst, double maxValue,
     else
         CV_Error( cv::Error::StsBadFlag, "Unknown/unsupported adaptive threshold method" );
 
-    int i, j;
     uchar imaxval = saturate_cast<uchar>(maxValue);
     int idelta = type == THRESH_BINARY ? cvCeil(delta) : cvFloor(delta);
-    uchar tab[768];
 
-    if( type == cv::THRESH_BINARY )
-        for( i = 0; i < 768; i++ )
-            tab[i] = (uchar)(i - 255 > -idelta ? imaxval : 0);
-    else if( type == cv::THRESH_BINARY_INV )
-        for( i = 0; i < 768; i++ )
-            tab[i] = (uchar)(i - 255 <= -idelta ? imaxval : 0);
-    else
+    if( type != cv::THRESH_BINARY && type != cv::THRESH_BINARY_INV )
         CV_Error( cv::Error::StsBadFlag, "Unknown/unsupported threshold type" );
+    const bool inv = type == cv::THRESH_BINARY_INV;
 
-    if( src.isContinuous() && mean.isContinuous() && dst.isContinuous() )
+    // rows kept separate rather than flattened, so there is something to split
+    parallel_for_(Range(0, size.height), [&](const Range& r)
     {
-        size.width *= size.height;
-        size.height = 1;
-    }
-
-    for( i = 0; i < size.height; i++ )
-    {
-        const uchar* sdata = src.ptr(i);
-        const uchar* mdata = mean.ptr(i);
-        uchar* ddata = dst.ptr(i);
-
-        for( j = 0; j < size.width; j++ )
-            ddata[j] = tab[sdata[j] - mdata[j] + 255];
-    }
+        for( int i = r.start; i < r.end; i++ )
+            adaptiveThresholdRow(src.ptr(i), mean.ptr(i), dst.ptr(i), size.width,
+                                 idelta, imaxval, inv);
+    }, dst.total()/(double)(1<<16));
 }
