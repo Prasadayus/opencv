@@ -270,3 +270,10 @@ endif()
 if(NOT OPENCV_DATA_CONFIG_STR STREQUAL "${__content}")
   file(WRITE "${OPENCV_DATA_CONFIG_FILE}" "${OPENCV_DATA_CONFIG_STR}")
 endif()
+
+if(WIN32 AND AARCH64 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  # clang 20.1.8/23.1.2 fails to assemble this at /O2: "value evaluated as 277 is out of
+  # range" - an ldur/stur immediate, so codegen, not the source. FileStorage, not hot.
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/src/persistence.cpp"
+                              PROPERTIES COMPILE_OPTIONS "/O1")
+endif()

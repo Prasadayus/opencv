@@ -22,6 +22,13 @@ ocv_glob_module_sources()
 ocv_module_include_directories()
 ocv_create_module()
 
+if(WIN32 AND AARCH64 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  # clang 20.1.8's AArch64 assembly printer crashes (0xC0000005) on gtest's SEH wrapper at
+  # /O2. GTEST_HAS_SEH=0 is not an option - the Windows death tests need it.
+  set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/src/ts_gtest.cpp"
+                              PROPERTIES COMPILE_OPTIONS "/O1")
+endif()
+
 # generate config file
 set(OPENCV_TESTS_CONFIG_FILE "${CMAKE_BINARY_DIR}/opencv_tests_config.hpp")
 set(OPENCV_TESTS_CONFIG_STR "")

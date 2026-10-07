@@ -127,6 +127,53 @@ struct nop
 };
 
 
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+// interior path: the four taps are unit-stride in j. 8U masks to 0xFF to keep cast_8u's C-cast
+// truncation; the float accumulation order matches the scalar one, which is not associative.
+template<typename _Tp, typename _DTp, typename _WTp>
+static inline int getRectSubPixRow_(const _Tp*, size_t, _DTp*, int, int, _WTp, _WTp, _WTp, _WTp)
+{ return 0; }
+
+static inline int getRectSubPixRow_(const uchar* src, size_t src_step, uchar* dst, int width,
+                                    int cn, int a11, int a12, int a21, int a22)
+{
+    const int vl = VTraits<v_int32>::vlanes();
+    const v_int32 v11 = vx_setall_s32(a11), v12 = vx_setall_s32(a12);
+    const v_int32 v21 = vx_setall_s32(a21), v22 = vx_setall_s32(a22);
+    const v_int32 vrnd = vx_setall_s32(1 << (SUBPIX_SHIFT-1)), vff = vx_setall_s32(0xFF);
+    int j = 0, b[VTraits<v_int32>::max_nlanes];
+    for( ; j <= width - vl; j += vl )
+    {
+        v_int32 s = v_add(v_add(v_mul(v_reinterpret_as_s32(vx_load_expand_q(src + j)), v11),
+                                v_mul(v_reinterpret_as_s32(vx_load_expand_q(src + j + cn)), v12)),
+                          v_add(v_mul(v_reinterpret_as_s32(vx_load_expand_q(src + j + src_step)), v21),
+                                v_mul(v_reinterpret_as_s32(vx_load_expand_q(src + j + src_step + cn)), v22)));
+        v_store(b, v_and(v_shr<SUBPIX_SHIFT>(v_add(s, vrnd)), vff));
+        for( int l = 0; l < vl; ++l )
+            dst[j+l] = (uchar)b[l];
+    }
+    return j;
+}
+
+static inline int getRectSubPixRow_(const float* src, size_t src_step, float* dst, int width,
+                                    int cn, float a11, float a12, float a21, float a22)
+{
+    const int vl = VTraits<v_float32>::vlanes();
+    const v_float32 v11 = vx_setall_f32(a11), v12 = vx_setall_f32(a12);
+    const v_float32 v21 = vx_setall_f32(a21), v22 = vx_setall_f32(a22);
+    int j = 0;
+    for( ; j <= width - vl; j += vl )
+    {
+        v_float32 s = v_mul(vx_load(src + j), v11);
+        s = v_add(s, v_mul(vx_load(src + j + cn), v12));
+        s = v_add(s, v_mul(vx_load(src + j + src_step), v21));
+        s = v_add(s, v_mul(vx_load(src + j + src_step + cn), v22));
+        v_store(dst + j, s);
+    }
+    return j;
+}
+#endif
+
 template<typename _Tp, typename _DTp, typename _WTp, class ScaleOp, class CastOp>
 void getRectSubPix_Cn_(const _Tp* src, size_t src_step, Size src_size,
                        _DTp* dst, size_t dst_step, Size win_size, Point2f center, int cn )
@@ -165,7 +212,11 @@ void getRectSubPix_Cn_(const _Tp* src, size_t src_step, Size src_size,
 
         for( i = 0; i < win_size.height; i++, src += src_step, dst += dst_step )
         {
-            for( j = 0; j <= win_size.width - 2; j += 2 )
+            j = 0;
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+            j = getRectSubPixRow_(src, src_step, dst, win_size.width, cn, a11, a12, a21, a22);
+#endif
+            for( ; j <= win_size.width - 2; j += 2 )
             {
                 _WTp s0 = src[j]*a11 + src[j+cn]*a12 + src[j+src_step]*a21 + src[j+src_step+cn]*a22;
                 _WTp s1 = src[j+1]*a11 + src[j+cn+1]*a12 + src[j+src_step+1]*a21 + src[j+src_step+cn+1]*a22;

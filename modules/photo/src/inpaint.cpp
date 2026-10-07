@@ -259,33 +259,32 @@ icvTeleaInpaintFMM(Mat &f, Mat &t, Mat &out, int range, CvPriorityQueueFloat *He
                            FastMarching_solve(i+1,j,i,j+1,f,t));
                t.at<float>(i,j) = dist;
 
-               cv::Point2f gradT[3];
-               for (color=0; color<=2; color++) {
-                  if (f.at<uchar>(i,j+1)!=INSIDE) {
-                     if (f.at<uchar>(i,j-1)!=INSIDE) {
-                        gradT[color].x=(float)((t.at<float>(i,j+1)-t.at<float>(i,j-1)))*0.5f;
-                     } else {
-                        gradT[color].x=(float)((t.at<float>(i,j+1)-t.at<float>(i,j)));
-                     }
+               // gradT does not depend on color - it reads only f and t (cf. the 1-channel path below)
+               cv::Point2f gradT;
+               if (f.at<uchar>(i,j+1)!=INSIDE) {
+                  if (f.at<uchar>(i,j-1)!=INSIDE) {
+                     gradT.x=(float)((t.at<float>(i,j+1)-t.at<float>(i,j-1)))*0.5f;
                   } else {
-                     if (f.at<uchar>(i,j-1)!=INSIDE) {
-                        gradT[color].x=(float)((t.at<float>(i,j)-t.at<float>(i,j-1)));
-                     } else {
-                        gradT[color].x=0;
-                     }
+                     gradT.x=(float)((t.at<float>(i,j+1)-t.at<float>(i,j)));
                   }
-                  if (f.at<uchar>(i+1,j)!=INSIDE) {
-                     if (f.at<uchar>(i-1,j)!=INSIDE) {
-                        gradT[color].y=(float)((t.at<float>(i+1,j)-t.at<float>(i-1,j)))*0.5f;
-                     } else {
-                        gradT[color].y=(float)((t.at<float>(i+1,j)-t.at<float>(i,j)));
-                     }
+               } else {
+                  if (f.at<uchar>(i,j-1)!=INSIDE) {
+                     gradT.x=(float)((t.at<float>(i,j)-t.at<float>(i,j-1)));
                   } else {
-                     if (f.at<uchar>(i-1,j)!=INSIDE) {
-                        gradT[color].y=(float)((t.at<float>(i,j)-t.at<float>(i-1,j)));
-                     } else {
-                        gradT[color].y=0;
-                     }
+                     gradT.x=0;
+                  }
+               }
+               if (f.at<uchar>(i+1,j)!=INSIDE) {
+                  if (f.at<uchar>(i-1,j)!=INSIDE) {
+                     gradT.y=(float)((t.at<float>(i+1,j)-t.at<float>(i-1,j)))*0.5f;
+                  } else {
+                     gradT.y=(float)((t.at<float>(i+1,j)-t.at<float>(i,j)));
+                  }
+               } else {
+                  if (f.at<uchar>(i-1,j)!=INSIDE) {
+                     gradT.y=(float)((t.at<float>(i,j)-t.at<float>(i-1,j)));
+                  } else {
+                     gradT.y=0;
                   }
                }
 
@@ -293,7 +292,7 @@ icvTeleaInpaintFMM(Mat &f, Mat &t, Mat &out, int range, CvPriorityQueueFloat *He
                float Jx[3] = {0,0,0};
                float Jy[3] = {0,0,0};
                float Ia[3] = {0,0,0};
-               float s[3] = {1.0e-20f,1.0e-20f,1.0e-20f};
+               float s = 1.0e-20f;   // w is color-invariant, so the three sums were identical
                float w,dst,lev,dir,sat;
 
                for (k=i-range; k<=i+range; k++) {
@@ -303,54 +302,65 @@ icvTeleaInpaintFMM(Mat &f, Mat &t, Mat &out, int range, CvPriorityQueueFloat *He
                      if (k>0&&l>0&&k<t.rows-1&&l<t.cols-1) {
                         if ((f.at<uchar>(k,l)!=INSIDE)&&
                             ((l-j)*(l-j)+(k-i)*(k-i)<=range*range)) {
+                           // r, dst, lev, dir and w are color-invariant - compute once per neighbour
+                           r.y     = (float)(i-k);
+                           r.x     = (float)(j-l);
+
+                           dst = (float)(1./(VectorLength(r)*sqrt((double)VectorLength(r))));
+                           lev = (float)(1./(1+fabs(t.at<float>(k,l)-t.at<float>(i,j))));
+
+                           dir=VectorScalMult(r,gradT);
+                           if (fabs(dir)<=0.01) dir=0.000001f;
+                           w = (float)fabs(dst*lev*dir);
+
+                           // The mask tests and the pixel addresses do not depend on color.
+                           // Resolve them once, then index [color] off the resolved pixels -
+                           // Mat::at recomputed the same address three times per neighbour.
+                           // A zero gradient is written as (p-p)*0.0f, which is exactly +0.0f.
+                           const PixelT *xa, *xb, *ya, *yb;
+                           float xs, ys;
+                           if (f.at<uchar>(k,l+1)!=INSIDE) {
+                              if (f.at<uchar>(k,l-1)!=INSIDE) {
+                                 xa=&out.at<PixelT>(km,lp+1); xb=&out.at<PixelT>(km,lm-1); xs=2.0f;
+                              } else {
+                                 xa=&out.at<PixelT>(km,lp+1); xb=&out.at<PixelT>(km,lm);   xs=1.0f;
+                              }
+                           } else {
+                              if (f.at<uchar>(k,l-1)!=INSIDE) {
+                                 xa=&out.at<PixelT>(km,lp);   xb=&out.at<PixelT>(km,lm-1); xs=1.0f;
+                              } else {
+                                 xa=xb=&out.at<PixelT>(km,lm);                             xs=0.0f;
+                              }
+                           }
+                           if (f.at<uchar>(k+1,l)!=INSIDE) {
+                              if (f.at<uchar>(k-1,l)!=INSIDE) {
+                                 ya=&out.at<PixelT>(kp+1,lm); yb=&out.at<PixelT>(km-1,lm); ys=2.0f;
+                              } else {
+                                 ya=&out.at<PixelT>(kp+1,lm); yb=&out.at<PixelT>(km,lm);   ys=1.0f;
+                              }
+                           } else {
+                              if (f.at<uchar>(k-1,l)!=INSIDE) {
+                                 ya=&out.at<PixelT>(kp,lm);   yb=&out.at<PixelT>(km-1,lm); ys=1.0f;
+                              } else {
+                                 ya=yb=&out.at<PixelT>(km,lm);                             ys=0.0f;
+                              }
+                           }
+                           const PixelT& pc = out.at<PixelT>(k-1,l-1);
+
                            for (color=0; color<=2; color++) {
-                              r.y     = (float)(i-k);
-                              r.x     = (float)(j-l);
-
-                              dst = (float)(1./(VectorLength(r)*sqrt((double)VectorLength(r))));
-                              lev = (float)(1./(1+fabs(t.at<float>(k,l)-t.at<float>(i,j))));
-
-                              dir=VectorScalMult(r,gradT[color]);
-                              if (fabs(dir)<=0.01) dir=0.000001f;
-                              w = (float)fabs(dst*lev*dir);
-
-                              if (f.at<uchar>(k,l+1)!=INSIDE) {
-                                 if (f.at<uchar>(k,l-1)!=INSIDE) {
-                                    gradI.x=(float)((out.at<PixelT>(km,lp+1)[color]-out.at<PixelT>(km,lm-1)[color]))*2.0f;
-                                 } else {
-                                    gradI.x=(float)((out.at<PixelT>(km,lp+1)[color]-out.at<PixelT>(km,lm)[color]));
-                                 }
-                              } else {
-                                 if (f.at<uchar>(k,l-1)!=INSIDE) {
-                                    gradI.x=(float)((out.at<PixelT>(km,lp)[color]-out.at<PixelT>(km,lm-1)[color]));
-                                 } else {
-                                    gradI.x=0;
-                                 }
-                              }
-                              if (f.at<uchar>(k+1,l)!=INSIDE) {
-                                 if (f.at<uchar>(k-1,l)!=INSIDE) {
-                                    gradI.y=(float)((out.at<PixelT>(kp+1,lm)[color]-out.at<PixelT>(km-1,lm)[color]))*2.0f;
-                                 } else {
-                                    gradI.y=(float)((out.at<PixelT>(kp+1,lm)[color]-out.at<PixelT>(km,lm)[color]));
-                                 }
-                              } else {
-                                 if (f.at<uchar>(k-1,l)!=INSIDE) {
-                                    gradI.y=(float)((out.at<PixelT>(kp,lm)[color]-out.at<PixelT>(km-1,lm)[color]));
-                                 } else {
-                                    gradI.y=0;
-                                 }
-                              }
-                              Ia[color] += (float)w * (float)(out.at<PixelT>(k-1,l-1)[color]);
+                              gradI.x=(float)((*xa)[color]-(*xb)[color])*xs;
+                              gradI.y=(float)((*ya)[color]-(*yb)[color])*ys;
+                              Ia[color] += (float)w * (float)(pc[color]);
                               Jx[color] -= (float)w * (float)(gradI.x*r.x);
                               Jy[color] -= (float)w * (float)(gradI.y*r.y);
-                              s[color]  += w;
                            }
+                           s += w;
                         }
                      }
                   }
                }
                for (color=0; color<=2; color++) {
-                  sat = (float)(Ia[color]/s[color]+(Jx[color]+Jy[color])/(sqrt(Jx[color]*Jx[color]+Jy[color]*Jy[color])+1.0e-20f));
+                  sat = (float)(Ia[color]/s+(Jx[color]+Jy[color])/(sqrt(Jx[color]*Jx[color]+Jy[color]*Jy[color])+1.0e-20f));
                   out.at<PixelT>(i-1,j-1)[color] = round_cast<uchar>(sat);
                }
 
@@ -512,40 +522,56 @@ icvNSInpaintFMM(Mat &f, Mat &t, Mat &out, int range, CvPriorityQueueFloat *Heap)
                      if (k>0&&l>0&&k<f.rows-1&&l<f.cols-1) {
                         if ((f.at<uchar>(k,l)!=INSIDE)&&
                             ((l-j)*(l-j)+(k-i)*(k-i)<=range*range)) {
+                           // r and dst are color-invariant - compute once per neighbour
+                           r.y=(float)(k-i);
+                           r.x=(float)(l-j);
+
+                           dst = 1/(VectorLength(r)*VectorLength(r)+1);
+
+                           // The mask tests and the pixel addresses do not depend on color.
+                           // Each gradient is |A-B|*s1 + |B-C|*s2, which reproduces all four
+                           // branches exactly - a disabled term uses A==B or B==C and adds +0.0f.
+                           const PixelT *xA, *xB, *xC, *yA, *yB, *yC;
+                           float xs1, xs2, ys1, ys2;
+
+                           xB = &out.at<PixelT>(kp,lm);
+                           if (f.at<uchar>(k+1,l)!=INSIDE) {
+                              if (f.at<uchar>(k-1,l)!=INSIDE) {
+                                 xA=&out.at<PixelT>(kp+1,lm); xC=&out.at<PixelT>(km-1,lm); xs1=1.0f; xs2=1.0f;
+                              } else {
+                                 xA=&out.at<PixelT>(kp+1,lm); xC=xB;                       xs1=2.0f; xs2=0.0f;
+                              }
+                           } else {
+                              if (f.at<uchar>(k-1,l)!=INSIDE) {
+                                 xA=xB;                       xC=&out.at<PixelT>(km-1,lm); xs1=0.0f; xs2=2.0f;
+                              } else {
+                                 xA=xB;                       xC=xB;                       xs1=0.0f; xs2=0.0f;
+                              }
+                           }
+
+                           yB = &out.at<PixelT>(km,lm);
+                           if (f.at<uchar>(k,l+1)!=INSIDE) {
+                              if (f.at<uchar>(k,l-1)!=INSIDE) {
+                                 yA=&out.at<PixelT>(km,lp+1); yC=&out.at<PixelT>(km,lm-1); ys1=1.0f; ys2=1.0f;
+                              } else {
+                                 yA=&out.at<PixelT>(km,lp+1); yC=yB;                       ys1=2.0f; ys2=0.0f;
+                              }
+                           } else {
+                              if (f.at<uchar>(k,l-1)!=INSIDE) {
+                                 yA=yB;                       yC=&out.at<PixelT>(km,lm-1); ys1=0.0f; ys2=2.0f;
+                              } else {
+                                 yA=yB;                       yC=yB;                       ys1=0.0f; ys2=0.0f;
+                              }
+                           }
+
+                           const PixelT& pc = out.at<PixelT>(k-1,l-1);
+                           const float lenR = VectorLength(r);   // color-invariant
+
                            for (color=0; color<=2; color++) {
-                              r.y=(float)(k-i);
-                              r.x=(float)(l-j);
-
-                              dst = 1/(VectorLength(r)*VectorLength(r)+1);
-
-                              if (f.at<uchar>(k+1,l)!=INSIDE) {
-                                 if (f.at<uchar>(k-1,l)!=INSIDE) {
-                                    gradI.x=(float)(abs(out.at<PixelT>(kp+1,lm)[color]-out.at<PixelT>(kp,lm)[color])+
-                                                    abs(out.at<PixelT>(kp,lm)[color]-out.at<PixelT>(km-1,lm)[color]));
-                                 } else {
-                                    gradI.x=(float)(abs(out.at<PixelT>(kp+1,lm)[color]-out.at<PixelT>(kp,lm)[color]))*2.0f;
-                                 }
-                              } else {
-                                 if (f.at<uchar>(k-1,l)!=INSIDE) {
-                                    gradI.x=(float)(abs(out.at<PixelT>(kp,lm)[color]-out.at<PixelT>(km-1,lm)[color]))*2.0f;
-                                 } else {
-                                    gradI.x=0;
-                                 }
-                              }
-                              if (f.at<uchar>(k,l+1)!=INSIDE) {
-                                 if (f.at<uchar>(k,l-1)!=INSIDE) {
-                                    gradI.y=(float)(abs(out.at<PixelT>(km,lp+1)[color]-out.at<PixelT>(km,lm)[color])+
-                                                    abs(out.at<PixelT>(km,lm)[color]-out.at<PixelT>(km,lm-1)[color]));
-                                 } else {
-                                    gradI.y=(float)(abs(out.at<PixelT>(km,lp+1)[color]-out.at<PixelT>(km,lm)[color]))*2.0f;
-                                 }
-                              } else {
-                                 if (f.at<uchar>(k,l-1)!=INSIDE) {
-                                    gradI.y=(float)(abs(out.at<PixelT>(km,lm)[color]-out.at<PixelT>(km,lm-1)[color]))*2.0f;
-                                 } else {
-                                    gradI.y=0;
-                                 }
-                              }
+                              gradI.x=(float)abs((*xA)[color]-(*xB)[color])*xs1 +
+                                      (float)abs((*xB)[color]-(*xC)[color])*xs2;
+                              gradI.y=(float)abs((*yA)[color]-(*yB)[color])*ys1 +
+                                      (float)abs((*yB)[color]-(*yC)[color])*ys2;
 
                               gradI.x=-gradI.x;
                               dir=VectorScalMult(r,gradI);
@@ -553,10 +579,10 @@ icvNSInpaintFMM(Mat &f, Mat &t, Mat &out, int range, CvPriorityQueueFloat *Heap)
                               if (fabs(dir)<=0.01) {
                                  dir=0.000001f;
                               } else {
-                                 dir = (float)fabs(VectorScalMult(r,gradI)/sqrt(VectorLength(r)*VectorLength(gradI)));
+                                 dir = (float)fabs(dir/sqrt(lenR*VectorLength(gradI)));
                               }
                               w = dst*dir;
-                              Ia[color] += (float)w * (float)(out.at<PixelT>(k-1,l-1)[color]);
+                              Ia[color] += (float)w * (float)(pc[color]);
                               s[color]  += w;
                            }
                         }

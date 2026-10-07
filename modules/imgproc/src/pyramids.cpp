@@ -73,8 +73,137 @@ template<typename T1, typename T2, int cn> int PyrDownVecH(const T1*, T2*, int)
 
 template<typename T1, typename T2, int cn> int PyrUpVecH(const T1*, T2*, int)
 {
-    return 0;
+    return cn;
 }
+
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+// dtab is a fixed interleave, not a gather: for cn==1 it is 2x, for cn==4 it is 8k+j, so both
+// stores are contiguous.
+static inline v_int32   pyrUpLoadH(const uchar* p)  { return v_reinterpret_as_s32(vx_load_expand_q(p)); }
+static inline v_int32   pyrUpLoadH(const short* p)  { return vx_load_expand(p); }
+static inline v_int32   pyrUpLoadH(const ushort* p) { return v_reinterpret_as_s32(vx_load_expand(p)); }
+static inline v_float32 pyrUpLoadH(const float* p)  { return vx_load(p); }
+
+template<> int PyrUpVecH<uchar, int, 1>(const uchar* src, int* row, int width)
+{
+    const int vl = VTraits<v_int32>::vlanes();
+    int x = 1;
+    const v_int32 v6 = vx_setall_s32(6), v4 = vx_setall_s32(4);
+    for( ; x <= width - 1 - vl; x += vl )
+    {
+        v_int32 a = pyrUpLoadH(src + x - 1), b = pyrUpLoadH(src + x), c = pyrUpLoadH(src + x + 1);
+        v_int32 t0 = v_add(v_add(a, v_mul(b, v6)), c), t1 = v_mul(v_add(b, c), v4);
+        v_store_interleave(row + x*2, t0, t1);
+    }
+    return x;
+}
+
+template<> int PyrUpVecH<uchar, int, 4>(const uchar* src, int* row, int width)
+{
+    const int vl = VTraits<v_int32>::vlanes();
+    int x = 4;
+    if( vl != 4 ) return x;   // the 8k+j store offsets assume 4 lanes
+    const v_int32 v6 = vx_setall_s32(6), v4 = vx_setall_s32(4);
+    for( ; x <= width - 4 - vl; x += vl )
+    {
+        v_int32 a = pyrUpLoadH(src + x - 4), b = pyrUpLoadH(src + x), c = pyrUpLoadH(src + x + 4);
+        v_int32 t0 = v_add(v_add(a, v_mul(b, v6)), c), t1 = v_mul(v_add(b, c), v4);
+        v_store(row + x*2, t0);
+        v_store(row + x*2 + 4, t1);
+    }
+    return x;
+}
+
+template<> int PyrUpVecH<short, int, 1>(const short* src, int* row, int width)
+{
+    const int vl = VTraits<v_int32>::vlanes();
+    int x = 1;
+    const v_int32 v6 = vx_setall_s32(6), v4 = vx_setall_s32(4);
+    for( ; x <= width - 1 - vl; x += vl )
+    {
+        v_int32 a = pyrUpLoadH(src + x - 1), b = pyrUpLoadH(src + x), c = pyrUpLoadH(src + x + 1);
+        v_int32 t0 = v_add(v_add(a, v_mul(b, v6)), c), t1 = v_mul(v_add(b, c), v4);
+        v_store_interleave(row + x*2, t0, t1);
+    }
+    return x;
+}
+
+template<> int PyrUpVecH<short, int, 4>(const short* src, int* row, int width)
+{
+    const int vl = VTraits<v_int32>::vlanes();
+    int x = 4;
+    if( vl != 4 ) return x;   // the 8k+j store offsets assume 4 lanes
+    const v_int32 v6 = vx_setall_s32(6), v4 = vx_setall_s32(4);
+    for( ; x <= width - 4 - vl; x += vl )
+    {
+        v_int32 a = pyrUpLoadH(src + x - 4), b = pyrUpLoadH(src + x), c = pyrUpLoadH(src + x + 4);
+        v_int32 t0 = v_add(v_add(a, v_mul(b, v6)), c), t1 = v_mul(v_add(b, c), v4);
+        v_store(row + x*2, t0);
+        v_store(row + x*2 + 4, t1);
+    }
+    return x;
+}
+
+template<> int PyrUpVecH<ushort, int, 1>(const ushort* src, int* row, int width)
+{
+    const int vl = VTraits<v_int32>::vlanes();
+    int x = 1;
+    const v_int32 v6 = vx_setall_s32(6), v4 = vx_setall_s32(4);
+    for( ; x <= width - 1 - vl; x += vl )
+    {
+        v_int32 a = pyrUpLoadH(src + x - 1), b = pyrUpLoadH(src + x), c = pyrUpLoadH(src + x + 1);
+        v_int32 t0 = v_add(v_add(a, v_mul(b, v6)), c), t1 = v_mul(v_add(b, c), v4);
+        v_store_interleave(row + x*2, t0, t1);
+    }
+    return x;
+}
+
+template<> int PyrUpVecH<ushort, int, 4>(const ushort* src, int* row, int width)
+{
+    const int vl = VTraits<v_int32>::vlanes();
+    int x = 4;
+    if( vl != 4 ) return x;   // the 8k+j store offsets assume 4 lanes
+    const v_int32 v6 = vx_setall_s32(6), v4 = vx_setall_s32(4);
+    for( ; x <= width - 4 - vl; x += vl )
+    {
+        v_int32 a = pyrUpLoadH(src + x - 4), b = pyrUpLoadH(src + x), c = pyrUpLoadH(src + x + 4);
+        v_int32 t0 = v_add(v_add(a, v_mul(b, v6)), c), t1 = v_mul(v_add(b, c), v4);
+        v_store(row + x*2, t0);
+        v_store(row + x*2 + 4, t1);
+    }
+    return x;
+}
+
+template<> int PyrUpVecH<float, float, 1>(const float* src, float* row, int width)
+{
+    const int vl = VTraits<v_float32>::vlanes();
+    int x = 1;
+    const v_float32 v6 = vx_setall_f32(6), v4 = vx_setall_f32(4);
+    for( ; x <= width - 1 - vl; x += vl )
+    {
+        v_float32 a = pyrUpLoadH(src + x - 1), b = pyrUpLoadH(src + x), c = pyrUpLoadH(src + x + 1);
+        v_float32 t0 = v_add(v_add(a, v_mul(b, v6)), c), t1 = v_mul(v_add(b, c), v4);
+        v_store_interleave(row + x*2, t0, t1);
+    }
+    return x;
+}
+
+template<> int PyrUpVecH<float, float, 4>(const float* src, float* row, int width)
+{
+    const int vl = VTraits<v_float32>::vlanes();
+    int x = 4;
+    if( vl != 4 ) return x;   // the 8k+j store offsets assume 4 lanes
+    const v_float32 v6 = vx_setall_f32(6), v4 = vx_setall_f32(4);
+    for( ; x <= width - 4 - vl; x += vl )
+    {
+        v_float32 a = pyrUpLoadH(src + x - 4), b = pyrUpLoadH(src + x), c = pyrUpLoadH(src + x + 4);
+        v_float32 t0 = v_add(v_add(a, v_mul(b, v6)), c), t1 = v_mul(v_add(b, c), v4);
+        v_store(row + x*2, t0);
+        v_store(row + x*2 + 4, t1);
+    }
+    return x;
+}
+#endif
 
 template<typename T1, typename T2> int PyrDownVecV(T1**, T2*, int) { return 0; }
 
@@ -1052,7 +1181,6 @@ pyrUp_( const Mat& _src, Mat& _dst, int)
     WT* rows[PU_SZ];
     T* dsts[2];
     CastOp castOp;
-    //PyrUpVecH<T, WT> vecOpH;
 
     CV_Assert( std::abs(dsize.width - ssize.width*2) == dsize.width % 2 &&
                std::abs(dsize.height - ssize.height*2) == dsize.height % 2);
@@ -1102,7 +1230,10 @@ pyrUp_( const Mat& _src, Mat& _dst, int)
                 }
             }
 
-            for( x = cn; x < ssize.width - cn; x++ )
+            x = cn;
+            if( cn == 1 )      x = PyrUpVecH<T, WT, 1>(src, row, ssize.width);
+            else if( cn == 4 ) x = PyrUpVecH<T, WT, 4>(src, row, ssize.width);
+            for( ; x < ssize.width - cn; x++ )
             {
                 int dx = dtab[x];
                 WT t0 = src[x-cn] + src[x]*6 + src[x+cn];

@@ -941,15 +941,72 @@ void cv::calcHist( const Mat* images, int nimages, const int* channels,
     const double* _uniranges = uniform ? &uniranges[0] : 0;
 
     int depth = images[0].depth();
+    const size_t esz1 = images[0].elemSize1();
 
-    if( depth == CV_8U )
-        calcHist_8u(ptrs, deltas, imsize, ihist, dims, ranges, _uniranges, uniform );
-    else if( depth == CV_16U )
-        calcHist_<ushort>(ptrs, deltas, imsize, ihist, dims, ranges, _uniranges, uniform );
-    else if( depth == CV_32F )
-        calcHist_<float>(ptrs, deltas, imsize, ihist, dims, ranges, _uniranges, uniform );
+    auto runKernel = [&](std::vector<uchar*>& p, Size sz, Mat& h)
+    {
+        if( depth == CV_8U )
+            calcHist_8u(p, deltas, sz, h, dims, ranges, _uniranges, uniform );
+        else if( depth == CV_16U )
+            calcHist_<ushort>(p, deltas, sz, h, dims, ranges, _uniranges, uniform );
+        else if( depth == CV_32F )
+            calcHist_<float>(p, deltas, sz, h, dims, ranges, _uniranges, uniform );
+        else
+            CV_Error(cv::Error::StsUnsupportedFormat, "");
+    };
+
+    // Each stripe accumulates into its own histogram and they are summed afterwards; the bins are
+    // integers, so the order of that sum cannot change the result. Under one stripe this is the
+    // single-threaded path unchanged.
+    const double T = (double)std::max(getNumThreads(), 1);
+    const int nstripes = (int)std::min((double)imsize.width*imsize.height/(1 << 16), 4.*T);
+
+    if( nstripes > 1 )
+    {
+        std::vector<Mat> parts((size_t)nstripes);
+        parallel_for_(Range(0, nstripes), [&](const Range& r)
+        {
+            for( int s = r.start; s < r.end; s++ )
+            {
+                std::vector<uchar*> p = ptrs;
+                Size sz;
+                // histPrepareImages collapses continuous input to one row
+                if( imsize.height == 1 )
+                {
+                    int lo = (int)((int64)imsize.width*s/nstripes);
+                    int hi = (int)((int64)imsize.width*(s + 1)/nstripes);
+                    for( int i = 0; i < dims; i++ )
+                        p[i] = ptrs[i] + (size_t)lo*deltas[i*2]*esz1;
+                    if( p[dims] )
+                        p[dims] = ptrs[dims] + lo;
+                    sz = Size(hi - lo, 1);
+                }
+                else
+                {
+                    int y0 = (int)((int64)imsize.height*s/nstripes);
+                    int y1 = (int)((int64)imsize.height*(s + 1)/nstripes);
+                    // deltas[i*2+1] is only the gap to the next row, not the whole stride
+                    for( int i = 0; i < dims; i++ )
+                        p[i] = ptrs[i] + (size_t)y0*(imsize.width*deltas[i*2] + deltas[i*2+1])*esz1;
+                    if( p[dims] )
+                        p[dims] = ptrs[dims] + (size_t)y0*deltas[dims*2 + 1];
+                    sz = Size(imsize.width, y1 - y0);
+                }
+                if( sz.width > 0 && sz.height > 0 )
+                {
+                    Mat h = Mat::zeros(ihist.dims, ihist.size.p, CV_32S);
+                    runKernel(p, sz, h);
+                    parts[s] = h;
+                }
+            }
+        }, nstripes);
+
+        for( int s = 0; s < nstripes; s++ )
+            if( !parts[s].empty() )
+                ihist += parts[s];
+    }
     else
-        CV_Error(cv::Error::StsUnsupportedFormat, "");
+        runKernel(ptrs, imsize, ihist);
 
     ihist.convertTo(hist, CV_32F);
 }
