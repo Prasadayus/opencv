@@ -135,6 +135,9 @@ struct Net::Impl : public detail::NetImplBase
     std::vector<int> bufidxs;
     std::vector<Mat> buffers;
     std::vector<Mat> scratchBufs;
+    // interior tensors kept alive for forward-to-layer
+    // See https://github.com/opencv/opencv/issues/26349
+    std::vector<Arg> pinnedArgs;
     std::vector<Ptr<Graph> > allgraphs;
     KVCacheManager kvCacheManager;
 
@@ -500,6 +503,9 @@ struct Net::Impl : public detail::NetImplBase
     // run the whole model, convenience wrapper
     void forwardWithMultipleOutputs(OutputArrayOfArrays outputBlobs,
                                     const std::vector<std::string>& outBlobNames);
+    // forward-to-layer: each name yields all outputs of the producing op
+    void forwardWithMultipleOutputsPerLayer(std::vector<std::vector<Mat> >& outputBlobs,
+                                            const std::vector<std::string>& outBlobNames);
     // try infer shapes; if some layers produce tensors with dynamic shapes, shape inference is impossible
     bool tryInferShapes(const std::vector<MatShape>& suggestedInpShapes,
                         const std::vector<MatType>& suggestedInpTypes,
@@ -539,6 +545,9 @@ struct Net::Impl : public detail::NetImplBase
     // collapse Reshape+InstanceNorm+Reshape+Mul+Add into InstanceNorm or GroupNormalization
     void fuseInstanceNormAffine();
     void fuseChains();
+    // fuseChains()'s chain pass limited to TransformLayout sinks; run
+    // after useBlockLayout(), which is what creates those nodes
+    void fuseTransformLayoutChains();
     // fuse ViT-style multi-head attention subgraphs
     void fuseAttention();
     // rewrite MatMul(A, const_B [, const_bias]) into Gemm so projection-style
@@ -583,8 +592,10 @@ Net readNetFromONNX2_ORT(const String& onnxFile);
 
 CV__DNN_INLINE_NS_END
 
+// residual (optional): added to the result in the same pass; see transform_layout_layer.cpp
 void transformLayout(const Mat& inp, Mat& out,
-                     DataLayout outlayout, DataLayout defaultLayout, int C0);
+                     DataLayout outlayout, DataLayout defaultLayout, int C0,
+                     const Mat& residual = Mat());
 
 }}  // namespace cv::dnn
 #endif  // __OPENCV_DNN_SRC_NET_IMPL_HPP__
