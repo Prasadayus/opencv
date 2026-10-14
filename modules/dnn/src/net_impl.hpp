@@ -121,6 +121,8 @@ struct Net::Impl : public detail::NetImplBase
     std::vector<int64> layersTimings;
 
     std::string modelFileName;
+    // Why an importer gave up on the model; empty for every net that loaded.
+    std::string importFailure;
     ModelFormat modelFormat;
     DataLayout originalLayout;
     // int onnx_opset;
@@ -154,6 +156,8 @@ struct Net::Impl : public detail::NetImplBase
     bool enableFP16, haveFP16;
     bool prepared; // need to rerun graph transformations/optimizations
     bool finalized = false; // executors have been selected for the current backend/target
+    // A const weight dropped after packing cannot be given back, and initCUDA() needs the raw one.
+    bool weightsReleased = false;
     std::vector<MatShape> pinnedInputShapes;
 
     // Post-fusion (pre block-layout) snapshot so finalize() can re-run from a clean
