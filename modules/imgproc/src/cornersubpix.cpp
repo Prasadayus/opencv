@@ -48,7 +48,6 @@ void cv::cornerSubPix( InputArray _image, InputOutputArray _corners,
 
     const int MAX_ITERS = 100;
     int win_w = win.width * 2 + 1, win_h = win.height * 2 + 1;
-    int i, j, k;
     int max_iters = (criteria.type & TermCriteria::MAX_ITER) ? MIN(MAX(criteria.maxCount, 1), MAX_ITERS) : MAX_ITERS;
     double eps = (criteria.type & TermCriteria::EPS) ? MAX(criteria.epsilon, 0.) : 0;
     eps *= eps; // use square of error in comparison operations
@@ -65,14 +64,14 @@ void cv::cornerSubPix( InputArray _image, InputOutputArray _corners,
     CV_Assert( src.cols >= win.width*2 + 5 && src.rows >= win.height*2 + 5 );
     CV_Assert( src.channels() == 1 );
 
-    Mat maskm(win_h, win_w, CV_32F), subpix_buf(win_h+2, win_w+2, CV_32F);
+    Mat maskm(win_h, win_w, CV_32F);
     float* mask = maskm.ptr<float>();
 
-    for( i = 0; i < win_h; i++ )
+    for( int i = 0; i < win_h; i++ )
     {
         float y = (float)(i - win.height)/win.height;
         float vy = std::exp(-y*y);
-        for( j = 0; j < win_w; j++ )
+        for( int j = 0; j < win_w; j++ )
         {
             float x = (float)(j - win.width)/win.width;
             mask[i * win_w + j] = (float)(vy*std::exp(-x*x));
@@ -83,17 +82,22 @@ void cv::cornerSubPix( InputArray _image, InputOutputArray _corners,
     if( zeroZone.width >= 0 && zeroZone.height >= 0 &&
         zeroZone.width * 2 + 1 < win_w && zeroZone.height * 2 + 1 < win_h )
     {
-        for( i = win.height - zeroZone.height; i <= win.height + zeroZone.height; i++ )
+        for( int i = win.height - zeroZone.height; i <= win.height + zeroZone.height; i++ )
         {
-            for( j = win.width - zeroZone.width; j <= win.width + zeroZone.width; j++ )
+            for( int j = win.width - zeroZone.width; j <= win.width + zeroZone.width; j++ )
             {
                 mask[i * win_w + j] = 0;
             }
         }
     }
 
-    // do optimization loop for all the points
-    for( int pt_i = 0; pt_i < count; pt_i++ )
+    // each corner refines independently from the shared mask and writes only its own slot;
+    // the work hint keeps small corner counts single-threaded, as in fisheye's Newton loop
+    parallel_for_(Range(0, count), [&](const Range& range)
+    {
+    // getRectSubPix writes into this, so it cannot be shared across threads
+    Mat subpix_buf(win_h+2, win_w+2, CV_32F);
+    for( int pt_i = range.start; pt_i < range.end; pt_i++ )
     {
         Point2f cT = corners[pt_i], cI = cT;
         if (!Rect(0, 0, src.cols, src.rows).contains(cT))
@@ -113,11 +117,11 @@ void cv::cornerSubPix( InputArray _image, InputOutputArray _corners,
             const float* subpix = &subpix_buf.at<float>(1,1);
 
             // process gradient
-            for( i = 0, k = 0; i < win_h; i++, subpix += win_w + 2 )
+            for( int i = 0, k = 0; i < win_h; i++, subpix += win_w + 2 )
             {
                 double py = i - win.height;
 
-                for( j = 0; j < win_w; j++, k++ )
+                for( int j = 0; j < win_w; j++, k++ )
                 {
                     double m = mask[k];
                     double tgx = subpix[j+1] - subpix[j-1];
@@ -159,6 +163,7 @@ void cv::cornerSubPix( InputArray _image, InputOutputArray _corners,
 
         corners[pt_i] = cI;
     }
+    }, count * max_iters * win_w * win_h / (double)(1 << 16));
 }
 
 /* End of file. */
