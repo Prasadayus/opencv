@@ -42,7 +42,15 @@
 #ifndef __OPENCV_FAST_NLMEANS_DENOISING_INVOKER_COMMONS_HPP__
 #define __OPENCV_FAST_NLMEANS_DENOISING_INVOKER_COMMONS_HPP__
 
+#include "opencv2/core/hal/intrin.hpp"
+
 using namespace cv;
+
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+// only single-channel pixels widen to int lanes in one step; Vec<> pixels keep the scalar loop
+static inline v_int32 nlmExpandToS32(const uchar* p)  { return v_reinterpret_as_s32(vx_load_expand_q(p)); }
+static inline v_int32 nlmExpandToS32(const ushort* p) { return v_reinterpret_as_s32(vx_load_expand(p)); }
+#endif
 
 template <typename T> struct pixelInfo_
 {
@@ -168,6 +176,15 @@ public:
         return calcDist<T>(a_down, b_down) - calcDist<T>(a_up, b_up);
     }
 
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+    static inline v_int32 calcUpDownDistVec(v_int32 a_up, v_int32 a_down,
+                                            v_int32 b_up, v_int32 b_down)
+    {
+        return v_sub(v_reinterpret_as_s32(v_abs(v_sub(a_down, b_down))),
+                     v_reinterpret_as_s32(v_abs(v_sub(a_up, b_up))));
+    }
+#endif
+
     template <typename T, typename WT>
     static inline WT calcWeight(double dist, const float *h,
                                 typename pixelInfo<WT>::sampleType fixed_point_mult)
@@ -289,6 +306,15 @@ public:
     {
         return calcUpDownDist_<T>::f(a_up, a_down, b_up, b_down);
     }
+
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+    static inline v_int32 calcUpDownDistVec(v_int32 a_up, v_int32 a_down,
+                                            v_int32 b_up, v_int32 b_down)
+    {
+        v_int32 A = v_sub(a_down, b_down), B = v_sub(a_up, b_up);
+        return v_mul(v_sub(A, B), v_add(A, B));
+    }
+#endif
 
     template <typename T, typename WT>
     static inline WT calcWeight(double dist, const float *h,

@@ -205,11 +205,35 @@ void FastNlMeansDenoisingInvoker<T, IT, UIT, D, WT>::operator() (const Range& ra
                         const T * b_up_ptr = extended_src_.ptr<T>(start_by - template_window_half_size_ - 1 + y);
                         const T * b_down_ptr = extended_src_.ptr<T>(start_by + template_window_half_size_ + y);
 
+                        int x = 0;
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+                        if constexpr (pixelInfo<T>::channels == 1)
+                        {
+                            const int vlanes = VTraits<v_int32>::vlanes();
+                            v_int32 va_up = vx_setall_s32((int)a_up);
+                            v_int32 va_down = vx_setall_s32((int)a_down);
+
+                            for (; x <= search_window_size - vlanes; x += vlanes)
+                            {
+                                v_int32 upd = D::calcUpDownDistVec(va_up, va_down,
+                                    nlmExpandToS32(b_up_ptr + start_bx + x),
+                                    nlmExpandToS32(b_down_ptr + start_bx + x));
+
+                                v_int32 col = v_add(vx_load(up_col_dist_sums_row + x), upd);
+                                v_int32 sum = v_add(v_sub(vx_load(dist_sums_row + x),
+                                                          vx_load(col_dist_sums_row + x)), col);
+
+                                v_store(col_dist_sums_row + x, col);
+                                v_store(up_col_dist_sums_row + x, col);
+                                v_store(dist_sums_row + x, sum);
+                            }
+                        }
+#endif
 // MSVC 2015 generates unaligned destination for "movaps" instruction for 32-bit builds
 #if defined _MSC_VER && _MSC_VER == 1900 && !defined _WIN64
 #pragma loop(no_vector)
 #endif
-                        for (int x = 0; x < search_window_size; x++)
+                        for (; x < search_window_size; x++)
                         {
                             // remove from current pixel sum column sum with index "first_col_num"
                             dist_sums_row[x] -= col_dist_sums_row[x];
