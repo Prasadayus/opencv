@@ -204,26 +204,43 @@ static void project_onto_jacobian_ECC(const Mat& src1, const Mat& src2, Mat& dst
 
     float* dstPtr = dst.ptr<float>(0);
 
+    // every block pair is an independent dot product over the whole image, and Mat::dot is
+    // itself serial, so the pairs are what gets spread across threads
     if (src1.cols != src2.cols) {  // dst.cols==1
         w = src2.cols;
-        for (int i = 0; i < dst.rows; i++) {
-            dstPtr[i] = (float)src2.dot(src1.colRange(i * w, (i + 1) * w));
-        }
+        parallel_for_(Range(0, dst.rows), [&](const Range& range) {
+            for (int i = range.start; i < range.end; i++) {
+                dstPtr[i] = (float)src2.dot(src1.colRange(i * w, (i + 1) * w));
+            }
+        }, dst.rows * (double)src1.rows * w / (1 << 16));
     }
 
     else {
         CV_Assert(dst.cols == dst.rows);  // dst is square (and symmetric)
         w = src2.cols / dst.cols;
-        Mat mat;
-        for (int i = 0; i < dst.rows; i++) {
-            mat = Mat(src1.colRange(i * w, (i + 1) * w));
-            dstPtr[i * (dst.rows + 1)] = (float)std::pow(norm(mat), 2);  // diagonal elements
 
-            for (int j = i + 1; j < dst.cols; j++) {  // j starts from i+1
-                dstPtr[i * dst.cols + j] = (float)mat.dot(src2.colRange(j * w, (j + 1) * w));
-                dstPtr[j * dst.cols + i] = dstPtr[i * dst.cols + j];  // due to symmetry
+        // flatten the upper triangle, diagonal included, so the pairs form one flat range
+        std::vector<Point> pairs;
+        pairs.reserve((size_t)dst.rows * (dst.rows + 1) / 2);
+        for (int i = 0; i < dst.rows; i++)
+            for (int j = i; j < dst.cols; j++)
+                pairs.push_back(Point(i, j));
+
+        const int cols = dst.cols;
+        parallel_for_(Range(0, (int)pairs.size()), [&](const Range& range) {
+            for (int k = range.start; k < range.end; k++) {
+                const int i = pairs[k].x, j = pairs[k].y;
+                Mat mat = Mat(src1.colRange(i * w, (i + 1) * w));
+                if (i == j) {
+                    dstPtr[i * (cols + 1)] = (float)std::pow(norm(mat), 2);  // diagonal elements
+                }
+                else {
+                    float v = (float)mat.dot(src2.colRange(j * w, (j + 1) * w));
+                    dstPtr[i * cols + j] = v;
+                    dstPtr[j * cols + i] = v;  // due to symmetry
+                }
             }
-        }
+        }, pairs.size() * (double)src1.rows * w / (1 << 16));
     }
 }
 
