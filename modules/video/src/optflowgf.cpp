@@ -116,42 +116,45 @@ FarnebackPrepareGaussian(int n, double sigma, float *g, float *xg, float *xxg,
 static void
 FarnebackPolyExp( const Mat& src, Mat& dst, int n, double sigma )
 {
-    int k, x, y;
-
     CV_Assert( src.type() == CV_32FC1 );
     int width = src.cols;
     int height = src.rows;
-    AutoBuffer<float> kbuf(n*6 + 3), _row((width + n*2)*3);
+    AutoBuffer<float> kbuf(n*6 + 3);
     float* g = kbuf.data() + n;
     float* xg = g + n*2 + 1;
     float* xxg = xg + n*2 + 1;
-    float *row = _row.data() + n*3;
     double ig11, ig03, ig33, ig55;
 
     FarnebackPrepareGaussian(n, sigma, g, xg, xxg, ig11, ig03, ig33, ig55);
 
     dst.create( height, width, CV_32FC(5));
 
-    for( y = 0; y < height; y++ )
+    parallel_for_(Range(0, height), [&](const Range& range)
+    {
+    // the scratch row is rewritten for every output row, so it has to be per-thread
+    AutoBuffer<float> _row((width + n*2)*3);
+    float* row = _row.data() + n*3;
+
+    for( int y = range.start; y < range.end; y++ )
     {
         float g0 = g[0], g1, g2;
         const float *srow0 = src.ptr<float>(y), *srow1 = 0;
         float *drow = dst.ptr<float>(y);
 
         // vertical part of convolution
-        for( x = 0; x < width; x++ )
+        for( int x = 0; x < width; x++ )
         {
             row[x*3] = srow0[x]*g0;
             row[x*3+1] = row[x*3+2] = 0.f;
         }
 
-        for( k = 1; k <= n; k++ )
+        for( int k = 1; k <= n; k++ )
         {
             g0 = g[k]; g1 = xg[k]; g2 = xxg[k];
             srow0 = src.ptr<float>(std::max(y-k,0));
             srow1 = src.ptr<float>(std::min(y+k,height-1));
 
-            for( x = 0; x < width; x++ )
+            for( int x = 0; x < width; x++ )
             {
                 float p = srow0[x] + srow1[x];
                 float t0 = row[x*3] + g0*p;
@@ -165,20 +168,20 @@ FarnebackPolyExp( const Mat& src, Mat& dst, int n, double sigma )
         }
 
         // horizontal part of convolution
-        for( x = 0; x < n*3; x++ )
+        for( int x = 0; x < n*3; x++ )
         {
             row[-1-x] = row[2-x];
             row[width*3+x] = row[width*3+x-3];
         }
 
-        for( x = 0; x < width; x++ )
+        for( int x = 0; x < width; x++ )
         {
             g0 = g[0];
             // r1 ~ 1, r2 ~ x, r3 ~ y, r4 ~ x^2, r5 ~ y^2, r6 ~ xy
             double b1 = row[x*3]*g0, b2 = 0, b3 = row[x*3+1]*g0,
                 b4 = 0, b5 = row[x*3+2]*g0, b6 = 0;
 
-            for( k = 1; k <= n; k++ )
+            for( int k = 1; k <= n; k++ )
             {
                 double tg = row[(x+k)*3] + row[(x-k)*3];
                 g0 = g[k];
@@ -198,8 +201,7 @@ FarnebackPolyExp( const Mat& src, Mat& dst, int n, double sigma )
             drow[x*5+4] = (float)(b6*ig55);
         }
     }
-
-    row -= n*3;
+    }, height * (double)width / (1 << 16));
 }
 
 
@@ -1178,7 +1180,11 @@ void FarnebackOpticalFlowImpl::calc(InputArray _prev0, InputArray _next0,
             FarnebackPolyExp( I, R[i], polyN_, polySigma_ );
         }
 
-        FarnebackUpdateMatrices( R[0], R[1], flow, M, 0, flow.rows );
+        M.create(flow.rows, flow.cols, CV_32FC(5));
+        parallel_for_(Range(0, flow.rows), [&](const Range& range)
+        {
+            FarnebackUpdateMatrices( R[0], R[1], flow, M, range.start, range.end );
+        }, flow.rows * (double)flow.cols / (1 << 16));
 
         for( i = 0; i < numIters_; i++ )
         {
