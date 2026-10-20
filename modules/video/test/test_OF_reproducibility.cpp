@@ -157,4 +157,40 @@ TEST_P(DenseOpticalFlow_VariationalRefinement, MultithreadReproducibility)
 
 INSTANTIATE_TEST_CASE_P(FullSet, DenseOpticalFlow_VariationalRefinement, Values(szODD, szQVGA));
 
+typedef tuple<Size, int> FarnebackParams;
+typedef TestWithParam<FarnebackParams> DenseOpticalFlow_Farneback;
+
+TEST_P(DenseOpticalFlow_Farneback, MultithreadReproducibility)
+{
+    const Size size = get<0>(GetParam());
+    const int flags = get<1>(GetParam());
+
+    const int nThreads = cv::getNumThreads();
+    if (nThreads == 1)
+        throw SkipTestException("Single thread environment");
+
+    for (int iter = 0; iter < 3; iter++)
+    {
+        Mat frame1(size, CV_8U), frame2(size, CV_8U);
+        randu(frame1, 0, 255);
+        randu(frame2, 0, 255);
+
+        Mat resMultiThread, resSingleThread;
+
+        cv::setNumThreads(nThreads);
+        calcOpticalFlowFarneback(frame1, frame2, resMultiThread, 0.5, 3, 15, 3, 5, 1.2, flags);
+
+        cv::setNumThreads(1);
+        calcOpticalFlowFarneback(frame1, frame2, resSingleThread, 0.5, 3, 15, 3, 5, 1.2, flags);
+
+        cv::setNumThreads(nThreads);
+
+        // splitting the rows only changes which thread runs one, so the two must match exactly
+        EXPECT_EQ(0.0, cv::norm(resSingleThread, resMultiThread, NORM_INF));
+    }
+}
+
+INSTANTIATE_TEST_CASE_P(FullSet, DenseOpticalFlow_Farneback,
+                        Combine(Values(szODD, szQVGA), Values(0, OPTFLOW_FARNEBACK_GAUSSIAN)));
+
 }} // namespace

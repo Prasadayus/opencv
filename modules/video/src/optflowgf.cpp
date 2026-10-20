@@ -318,90 +318,95 @@ FarnebackUpdateFlow_Blur( const Mat& _R0, const Mat& _R1,
                           Mat& _flow, Mat& matM, int block_size,
                           bool update_matrices )
 {
-    int x, y, width = _flow.cols, height = _flow.rows;
+    int width = _flow.cols, height = _flow.rows;
     int m = block_size/2;
-    int y0 = 0, y1;
-    int min_update_stripe = std::max((1 << 10)/width, block_size);
     double scale = 1./(block_size*block_size);
 
-    AutoBuffer<double> _vsum((width+m*2+2)*5);
-    double* vsum = _vsum.data() + (m+1)*5;
-
-    // init vsum
-    const float* srow0 = matM.ptr<float>();
-    for( x = 0; x < width*5; x++ )
-        vsum[x] = srow0[x]*(m+2);
-
-    for( y = 1; y < m; y++ )
+    // The matM refresh used to be interleaved into this sweep, but it only ever rewrites rows at
+    // y - block_size, which is below the y - m - 1 lower edge of the read window - so refreshed
+    // rows are never read again here. Hoisting it to its own pass leaves matM identical and lets
+    // the rows run concurrently. vsum carries down the rows, so each stripe rebuilds it.
+    parallel_for_(Range(0, height), [&](const Range& range)
     {
-        srow0 = matM.ptr<float>(std::min(y,height-1));
-        for( x = 0; x < width*5; x++ )
-            vsum[x] += srow0[x];
-    }
+        AutoBuffer<double> _vsum((width+m*2+2)*5);
+        double* vsum = _vsum.data() + (m+1)*5;
 
-    // compute blur(G)*flow=blur(h)
-    for( y = 0; y < height; y++ )
+        // state on entry to the stripe's first row: rows [ys-m, ys+m-1] plus row ys-m-1, clamped.
+        // At ys == 0 this reduces to the original (m+2)*matM[0] + matM[1..m-1].
+        for( int x = 0; x < width*5; x++ )
+            vsum[x] = 0;
+        for( int k = range.start - m - 1; k <= range.start + m - 1; k++ )
+        {
+            const float* s = matM.ptr<float>(std::min(std::max(k, 0), height-1));
+            for( int x = 0; x < width*5; x++ )
+                vsum[x] += s[x];
+        }
+
+        for( int y = range.start; y < range.end; y++ )
+        {
+            double g11, g12, g22, h1, h2;
+            float* flow = _flow.ptr<float>(y);
+
+            const float* srow0 = matM.ptr<float>(std::max(y-m-1,0));
+            const float* srow1 = matM.ptr<float>(std::min(y+m,height-1));
+
+            // vertical blur
+            for( int x = 0; x < width*5; x++ )
+                vsum[x] += srow1[x] - srow0[x];
+
+            // update borders
+            for( int x = 0; x < (m+1)*5; x++ )
+            {
+                vsum[-1-x] = vsum[4-x];
+                vsum[width*5+x] = vsum[width*5+x-5];
+            }
+
+            // init g** and h*
+            g11 = vsum[0]*(m+2);
+            g12 = vsum[1]*(m+2);
+            g22 = vsum[2]*(m+2);
+            h1 = vsum[3]*(m+2);
+            h2 = vsum[4]*(m+2);
+
+            for( int x = 1; x < m; x++ )
+            {
+                g11 += vsum[x*5];
+                g12 += vsum[x*5+1];
+                g22 += vsum[x*5+2];
+                h1 += vsum[x*5+3];
+                h2 += vsum[x*5+4];
+            }
+
+            // horizontal blur
+            for( int x = 0; x < width; x++ )
+            {
+                g11 += vsum[(x+m)*5] - vsum[(x-m)*5 - 5];
+                g12 += vsum[(x+m)*5 + 1] - vsum[(x-m)*5 - 4];
+                g22 += vsum[(x+m)*5 + 2] - vsum[(x-m)*5 - 3];
+                h1 += vsum[(x+m)*5 + 3] - vsum[(x-m)*5 - 2];
+                h2 += vsum[(x+m)*5 + 4] - vsum[(x-m)*5 - 1];
+
+                double g11_ = g11*scale;
+                double g12_ = g12*scale;
+                double g22_ = g22*scale;
+                double h1_ = h1*scale;
+                double h2_ = h2*scale;
+
+                double idet = 1./(g11_*g22_ - g12_*g12_+1e-3);
+
+                flow[x*2] = (float)((g11_*h2_-g12_*h1_)*idet);
+                flow[x*2+1] = (float)((g22_*h1_-g12_*h2_)*idet);
+            }
+        }
+    }, height * (double)width / (1 << 16));
+
+    if( update_matrices )
     {
-        double g11, g12, g22, h1, h2;
-        float* flow = _flow.ptr<float>(y);
-
-        srow0 = matM.ptr<float>(std::max(y-m-1,0));
-        const float* srow1 = matM.ptr<float>(std::min(y+m,height-1));
-
-        // vertical blur
-        for( x = 0; x < width*5; x++ )
-            vsum[x] += srow1[x] - srow0[x];
-
-        // update borders
-        for( x = 0; x < (m+1)*5; x++ )
+        matM.create(height, width, CV_32FC(5));
+        parallel_for_(Range(0, height), [&](const Range& range)
         {
-            vsum[-1-x] = vsum[4-x];
-            vsum[width*5+x] = vsum[width*5+x-5];
-        }
-
-        // init g** and h*
-        g11 = vsum[0]*(m+2);
-        g12 = vsum[1]*(m+2);
-        g22 = vsum[2]*(m+2);
-        h1 = vsum[3]*(m+2);
-        h2 = vsum[4]*(m+2);
-
-        for( x = 1; x < m; x++ )
-        {
-            g11 += vsum[x*5];
-            g12 += vsum[x*5+1];
-            g22 += vsum[x*5+2];
-            h1 += vsum[x*5+3];
-            h2 += vsum[x*5+4];
-        }
-
-        // horizontal blur
-        for( x = 0; x < width; x++ )
-        {
-            g11 += vsum[(x+m)*5] - vsum[(x-m)*5 - 5];
-            g12 += vsum[(x+m)*5 + 1] - vsum[(x-m)*5 - 4];
-            g22 += vsum[(x+m)*5 + 2] - vsum[(x-m)*5 - 3];
-            h1 += vsum[(x+m)*5 + 3] - vsum[(x-m)*5 - 2];
-            h2 += vsum[(x+m)*5 + 4] - vsum[(x-m)*5 - 1];
-
-            double g11_ = g11*scale;
-            double g12_ = g12*scale;
-            double g22_ = g22*scale;
-            double h1_ = h1*scale;
-            double h2_ = h2*scale;
-
-            double idet = 1./(g11_*g22_ - g12_*g12_+1e-3);
-
-            flow[x*2] = (float)((g11_*h2_-g12_*h1_)*idet);
-            flow[x*2+1] = (float)((g22_*h1_-g12_*h2_)*idet);
-        }
-
-        y1 = y == height - 1 ? height : y - block_size;
-        if( update_matrices && (y1 == height || y1 >= y0 + min_update_stripe) )
-        {
-            FarnebackUpdateMatrices( _R0, _R1, _flow, matM, y0, y1 );
-            y0 = y1;
-        }
+            FarnebackUpdateMatrices( _R0, _R1, _flow, matM, range.start, range.end );
+        }, height * (double)width / (1 << 16));
     }
 }
 
@@ -411,21 +416,15 @@ FarnebackUpdateFlow_GaussianBlur( const Mat& _R0, const Mat& _R1,
                                   Mat& _flow, Mat& matM, int block_size,
                                   bool update_matrices )
 {
-    int x, y, i, width = _flow.cols, height = _flow.rows;
+    int width = _flow.cols, height = _flow.rows;
     int m = block_size/2;
-    int y0 = 0, y1;
-    int min_update_stripe = std::max((1 << 10)/width, block_size);
     double sigma = m*0.3, s = 1;
 
-    AutoBuffer<float> _vsum((width+m*2+2)*5 + 16), _hsum(width*5 + 16);
     AutoBuffer<float> _kernel((m+1)*5 + 16);
-    AutoBuffer<const float*> _srow(m*2+1);
-    float *vsum = alignPtr(_vsum.data() + (m+1)*5, 16), *hsum = alignPtr(_hsum.data(), 16);
     float* kernel = _kernel.data();
-    const float** srow = _srow.data();
     kernel[0] = (float)s;
 
-    for( i = 1; i <= m; i++ )
+    for( int i = 1; i <= m; i++ )
     {
         float t = (float)std::exp(-i*i/(2*sigma*sigma) );
         kernel[i] = t;
@@ -433,19 +432,30 @@ FarnebackUpdateFlow_GaussianBlur( const Mat& _R0, const Mat& _R1,
     }
 
     s = 1./s;
-    for( i = 0; i <= m; i++ )
+    for( int i = 0; i <= m; i++ )
         kernel[i] = (float)(kernel[i]*s);
 
 #if CV_SIMD128
     float* simd_kernel = alignPtr(kernel + m+1, 16);
     {
-        for( i = 0; i <= m; i++ )
+        for( int i = 0; i <= m; i++ )
             v_store(simd_kernel + i*4, v_setall_f32(kernel[i]));
     }
 #endif
 
     // compute blur(G)*flow=blur(h)
-    for( y = 0; y < height; y++ )
+    // vsum is rebuilt from srow[] at every row, so unlike the box kernel nothing is carried down
+    // the rows and only the scratch buffers need to be per-thread. The matM refresh is hoisted
+    // out for the same reason as there: it only rewrites rows the sweep has already passed.
+    parallel_for_(Range(0, height), [&](const Range& range)
+    {
+    AutoBuffer<float> _vsum((width+m*2+2)*5 + 16), _hsum(width*5 + 16);
+    AutoBuffer<const float*> _srow(m*2+1);
+    float *vsum = alignPtr(_vsum.data() + (m+1)*5, 16), *hsum = alignPtr(_hsum.data(), 16);
+    const float** srow = _srow.data();
+    int x, i;
+
+    for( int y = range.start; y < range.end; y++ )
     {
         double g11, g12, g22, h1, h2;
         float* flow = _flow.ptr<float>(y);
@@ -569,12 +579,16 @@ FarnebackUpdateFlow_GaussianBlur( const Mat& _R0, const Mat& _R1,
             flow[x*2+1] = (float)((g22*h1-g12*h2)*idet);
         }
 
-        y1 = y == height - 1 ? height : y - block_size;
-        if( update_matrices && (y1 == height || y1 >= y0 + min_update_stripe) )
+    }
+    }, height * (double)width / (1 << 16));
+
+    if( update_matrices )
+    {
+        matM.create(height, width, CV_32FC(5));
+        parallel_for_(Range(0, height), [&](const Range& range)
         {
-            FarnebackUpdateMatrices( _R0, _R1, _flow, matM, y0, y1 );
-            y0 = y1;
-        }
+            FarnebackUpdateMatrices( _R0, _R1, _flow, matM, range.start, range.end );
+        }, height * (double)width / (1 << 16));
     }
 }
 
