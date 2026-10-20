@@ -182,33 +182,41 @@ void Domain_Filter::compute_Rfilter(Mat &output, Mat &hz, float sigma_h)
     output.copyTo(temp);
     Mat V = Mat(h,w,CV_32FC1);
 
-    for(int i=0;i<h;i++)
-        for(int j=0;j<w;j++)
-            V.at<float>(i,j) = std::pow(a,hz.at<float>(i,j));
-
-   for(int i=0; i<h; i++)
+    // Each row is an independent recursion, so the sweeps run over rows in parallel. Row i's V is
+    // only ever read by row i, so the three passes fold into one. Row pointers replace Mat::at,
+    // which recomputed the row base for every one of the four accesses per element.
+    parallel_for_(Range(0, h), [&](const Range& rows)
     {
-        for(int j =1; j < w; j++)
+        for(int i = rows.start; i < rows.end; i++)
         {
-            for(int c = 0; c<channel; c++)
+            const float* hzr = hz.ptr<float>(i);
+            float* Vr = V.ptr<float>(i);
+            for(int j = 0; j < w; j++)
+                Vr[j] = std::pow(a, hzr[j]);
+
+            float* t = temp.ptr<float>(i);
+
+            for(int j = 1; j < w; j++)
             {
-                temp.at<float>(i,j*channel+c) = temp.at<float>(i,j*channel+c) +
-                    (temp.at<float>(i,(j-1)*channel+c) - temp.at<float>(i,j*channel+c)) * V.at<float>(i,j);
+                const float v = Vr[j];
+                for(int c = 0; c < channel; c++)
+                {
+                    const int k = j*channel + c;
+                    t[k] = t[k] + (t[k-channel] - t[k]) * v;
+                }
+            }
+
+            for(int j = w-2; j >= 0; j--)
+            {
+                const float v = Vr[j+1];
+                for(int c = 0; c < channel; c++)
+                {
+                    const int k = j*channel + c;
+                    t[k] = t[k] + (t[k+channel] - t[k]) * v;
+                }
             }
         }
-    }
-
-    for(int i=0; i<h; i++)
-    {
-        for(int j =w-2; j >= 0; j--)
-        {
-            for(int c = 0; c<channel; c++)
-            {
-                temp.at<float>(i,j*channel+c) = temp.at<float>(i,j*channel+c) +
-                    (temp.at<float>(i,(j+1)*channel+c) - temp.at<float>(i,j*channel+c))*V.at<float>(i,j+1);
-            }
-        }
-    }
+    }, (double)h*w/(1 << 16));
 
     temp.copyTo(output);
 }
@@ -217,91 +225,69 @@ void Domain_Filter::compute_boxfilter(Mat &output, Mat &hz, Mat &psketch, float 
 {
     int h = output.rows;
     int w = output.cols;
-    Mat lower_pos = Mat(h,w,CV_32FC1);
-    Mat upper_pos = Mat(h,w,CV_32FC1);
-
-    lower_pos = hz - radius;
-    upper_pos = hz + radius;
 
     lower_idx = Mat::zeros(h,w,CV_32FC1);
     upper_idx = Mat::zeros(h,w,CV_32FC1);
 
-    Mat domain_row = Mat::zeros(1,w+1,CV_32FC1);
-
-    for(int i=0;i<h;i++)
+    // Rows are independent. The per-row Mats this used to allocate (four of them, plus two
+    // full-size lower/upper position images) are replaced by three scratch rows per thread;
+    // hz +/- radius is computed where it is read. Note `temp` is deliberately shared between the
+    // two scans below, as it was before: a scan that never breaks keeps the previous value.
+    parallel_for_(Range(0, h), [&](const Range& rows)
     {
-        for(int j=0;j<w;j++)
-            domain_row.at<float>(0,j) = hz.at<float>(i,j);
-        domain_row.at<float>(0,w) = (float) myinf;
+        AutoBuffer<float> _dom(w + 1), _tl(w), _tu(w);
+        float* domain = _dom.data();
+        float* tl = _tl.data();
+        float* tu = _tu.data();
 
-        Mat lower_pos_row = Mat::zeros(1,w,CV_32FC1);
-        Mat upper_pos_row = Mat::zeros(1,w,CV_32FC1);
-
-        for(int j=0;j<w;j++)
+        for(int i = rows.start; i < rows.end; i++)
         {
-            lower_pos_row.at<float>(0,j) = lower_pos.at<float>(i,j);
-            upper_pos_row.at<float>(0,j) = upper_pos.at<float>(i,j);
-        }
+            const float* hzr = hz.ptr<float>(i);
+            float* lo = lower_idx.ptr<float>(i);
+            float* hi = upper_idx.ptr<float>(i);
 
-        Mat temp_lower_idx = Mat::zeros(1,w,CV_32FC1);
-        Mat temp_upper_idx = Mat::zeros(1,w,CV_32FC1);
+            for(int j = 0; j < w; j++)
+                domain[j] = hzr[j];
+            domain[w] = (float) myinf;
 
-        for(int j=0;j<w;j++)
-        {
-            if(domain_row.at<float>(0,j) > lower_pos_row.at<float>(0,0))
+            tl[0] = 0.f;
+            tu[0] = 0.f;
+            for(int j = 0; j < w; j++)
+                if(domain[j] > hzr[0] - radius) { tl[0] = (float) j; break; }
+            for(int j = 0; j < w; j++)
+                if(domain[j] > hzr[0] + radius) { tu[0] = (float) j; break; }
+
+            int temp = 0;
+            for(int j = 1; j < w; j++)
             {
-                temp_lower_idx.at<float>(0,0) = (float) j;
-                break;
-            }
-        }
-        for(int j=0;j<w;j++)
-        {
-            if(domain_row.at<float>(0,j) > upper_pos_row.at<float>(0,0))
-            {
-                temp_upper_idx.at<float>(0,0) = (float) j;
-                break;
-            }
-        }
+                const float lower_pos = hzr[j] - radius;
+                const float upper_pos = hzr[j] + radius;
 
-        int temp = 0;
-        for(int j=1;j<w;j++)
-        {
-            int count=0;
-            for(int k=(int) temp_lower_idx.at<float>(0,j-1);k<w+1;k++)
-            {
-                if(domain_row.at<float>(0,k) > lower_pos_row.at<float>(0,j))
+                int count = 0;
+                for(int k = (int) tl[j-1]; k < w+1; k++)
                 {
-                    temp = count;
-                    break;
+                    if(domain[k] > lower_pos) { temp = count; break; }
+                    count++;
                 }
-                count++;
-            }
+                tl[j] = tl[j-1] + temp;
 
-            temp_lower_idx.at<float>(0,j) = temp_lower_idx.at<float>(0,j-1) + temp;
-
-            count = 0;
-            for(int k=(int) temp_upper_idx.at<float>(0,j-1);k<w+1;k++)
-            {
-
-
-                if(domain_row.at<float>(0,k) > upper_pos_row.at<float>(0,j))
+                count = 0;
+                for(int k = (int) tu[j-1]; k < w+1; k++)
                 {
-                    temp = count;
-                    break;
+                    if(domain[k] > upper_pos) { temp = count; break; }
+                    count++;
                 }
-                count++;
+                tu[j] = tu[j-1] + temp;
             }
 
-            temp_upper_idx.at<float>(0,j) = temp_upper_idx.at<float>(0,j-1) + temp;
+            for(int j = 0; j < w; j++)
+            {
+                lo[j] = tl[j] + 1;
+                hi[j] = tu[j] + 1;
+            }
         }
+    }, (double)h*w/(1 << 16));
 
-        for(int j=0;j<w;j++)
-        {
-            lower_idx.at<float>(i,j) = temp_lower_idx.at<float>(0,j) + 1;
-            upper_idx.at<float>(i,j) = temp_upper_idx.at<float>(0,j) + 1;
-        }
-
-    }
     psketch = upper_idx - lower_idx;
 }
 void Domain_Filter::compute_NCfilter(Mat &output, Mat &hz, Mat &psketch, float radius)
@@ -317,82 +303,80 @@ void Domain_Filter::compute_NCfilter(Mat &output, Mat &hz, Mat &psketch, float r
 
     Mat box_filter = Mat::zeros(h,w+1,CV_32FC3);
 
-    for(int i = 0; i < h; i++)
+    // row-wise prefix sum; rows are independent
+    parallel_for_(Range(0, h), [&](const Range& rows)
     {
-        box_filter.at<float>(i,1*channel+0) = output.at<float>(i,0*channel+0);
-        box_filter.at<float>(i,1*channel+1) = output.at<float>(i,0*channel+1);
-        box_filter.at<float>(i,1*channel+2) = output.at<float>(i,0*channel+2);
-        for(int j = 2; j < w+1; j++)
+        for(int i = rows.start; i < rows.end; i++)
         {
-            for(int c=0;c<channel;c++)
-                box_filter.at<float>(i,j*channel+c) = output.at<float>(i,(j-1)*channel+c) + box_filter.at<float>(i,(j-1)*channel+c);
+            const float* o = output.ptr<float>(i);
+            float* bf = box_filter.ptr<float>(i);
+            bf[1*channel+0] = o[0*channel+0];
+            bf[1*channel+1] = o[0*channel+1];
+            bf[1*channel+2] = o[0*channel+2];
+            for(int j = 2; j < w+1; j++)
+                for(int c = 0; c < channel; c++)
+                    bf[j*channel+c] = o[(j-1)*channel+c] + bf[(j-1)*channel+c];
         }
-    }
+    }, (double)h*w/(1 << 16));
 
-    Mat indices = Mat::zeros(h,w,CV_32FC1);
     Mat final =   Mat::zeros(h,w,CV_32FC3);
 
-    for(int i=0;i<h;i++)
-        for(int j=0;j<w;j++)
-            indices.at<float>(i,j) = (float) i+1;
-
-    Mat a = Mat::zeros(h,w,CV_32FC1);
-    Mat b = Mat::zeros(h,w,CV_32FC1);
-
     // Compute the box filter using a summed area table.
+    // a and b used to be built as full images from `flag`, `indices` and two temporaries, one set
+    // per channel. They are the same float expression per element, so they are formed here
+    // instead; the index decode below is unchanged.
     for(int c=0;c<channel;c++)
     {
-        Mat flag = Mat::ones(h,w,CV_32FC1);
-        multiply(flag,c+1,flag);
+        const float cbase = (float)c * (float)(h*(w+1));
 
-        Mat temp1, temp2;
-        multiply(flag - 1,h*(w+1),temp1);
-        multiply(lower_idx - 1,h,temp2);
-        a = temp1 + temp2 + indices;
-
-        multiply(flag - 1,h*(w+1),temp1);
-        multiply(upper_idx - 1,h,temp2);
-        b = temp1 + temp2 + indices;
-
-        int p,q,r,rem;
-        int p1,q1,r1,rem1;
-
-        // Calculating indices
-        for(int i=0;i<h;i++)
+        parallel_for_(Range(0, h), [&](const Range& rows)
         {
-            for(int j=0;j<w;j++)
+            for(int i = rows.start; i < rows.end; i++)
             {
+                const float* lo = lower_idx.ptr<float>(i);
+                const float* hi = upper_idx.ptr<float>(i);
+                float* fin = final.ptr<float>(i);
+                const float idx = (float)(i+1);
 
-                r = (int) b.at<float>(i,j)/(h*(w+1));
-                rem = (int) b.at<float>(i,j) - r*h*(w+1);
-                q = rem/h;
-                p = rem - q*h;
-                if(q==0)
-                {
-                    p=h;
-                    q=w;
-                    r=r-1;
-                }
-                if(p==0)
-                {
-                    p=h;
-                    q=q-1;
-                }
+                int p,q,r,rem;
+                int p1,q1,r1,rem1;
 
-                r1 = (int) a.at<float>(i,j)/(h*(w+1));
-                rem1 = (int) a.at<float>(i,j) - r1*h*(w+1);
-                q1 = rem1/h;
-                p1 = rem1 - q1*h;
-                if(p1==0)
+                for(int j=0;j<w;j++)
                 {
-                    p1=h;
-                    q1=q1-1;
-                }
+                    const float av = cbase + (lo[j] - 1.f) * (float)h + idx;
+                    const float bv = cbase + (hi[j] - 1.f) * (float)h + idx;
 
-                final.at<float>(i,j*channel+2-c) = (box_filter.at<float>(p-1,q*channel+(2-r)) - box_filter.at<float>(p1-1,q1*channel+(2-r1)))
-                    /(upper_idx.at<float>(i,j) - lower_idx.at<float>(i,j));
+                    r = (int) bv/(h*(w+1));
+                    rem = (int) bv - r*h*(w+1);
+                    q = rem/h;
+                    p = rem - q*h;
+                    if(q==0)
+                    {
+                        p=h;
+                        q=w;
+                        r=r-1;
+                    }
+                    if(p==0)
+                    {
+                        p=h;
+                        q=q-1;
+                    }
+
+                    r1 = (int) av/(h*(w+1));
+                    rem1 = (int) av - r1*h*(w+1);
+                    q1 = rem1/h;
+                    p1 = rem1 - q1*h;
+                    if(p1==0)
+                    {
+                        p1=h;
+                        q1=q1-1;
+                    }
+
+                    fin[j*channel+2-c] = (box_filter.at<float>(p-1,q*channel+(2-r)) - box_filter.at<float>(p1-1,q1*channel+(2-r1)))
+                        /(hi[j] - lo[j]);
+                }
             }
-        }
+        }, (double)h*w/(1 << 16));
     }
 
     final.copyTo(output);
