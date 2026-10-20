@@ -3,6 +3,7 @@
 // of this distribution and at http://opencv.org/license.html
 
 #include "precomp.hpp"
+#include "opencv2/core/hal/intrin.hpp"
 
 namespace cv {
 
@@ -146,23 +147,75 @@ static void buildRemapsFromCoeffMat(int height, int width,
     const float* Cy = coeffs.ptr<float>(rowY);
 
 
+    // fixed-width f64 lanes only; the power table is held in registers, so a scalable backend
+    // cannot size it at compile time and keeps the scalar path
+#if CV_SIMD_64F
+    const int MAX_VEC_DEGREE = 15;
+    const bool useVec = degree <= MAX_VEC_DEGREE;
+#endif
+
     parallel_for_(Range(0, height), [&](const Range& rows){
         std::vector<double> x_pow(degree + 1);
         std::vector<double> y_pow(degree + 1);
+#if CV_SIMD_64F
+        v_float64 vx_pow[MAX_VEC_DEGREE + 1];
+        double lane_x[VTraits<v_float64>::max_nlanes];
+        double lane_dx[VTraits<v_float64>::max_nlanes], lane_dy[VTraits<v_float64>::max_nlanes];
+        const int vlanes = VTraits<v_float64>::vlanes();
+#endif
         for (int y = rows.start; y < rows.end; ++y) {
             // the grids held nothing but the loop indices, so the coordinate, the offset and the
             // final subtraction all stay in registers instead of six full-size float buffers
             float* MX = map_x.ptr<float>(y);
             float* MY = map_y.ptr<float>(y);
             const double yn = ((float)y - mean_y) * inv_std_y;
-            for (int x = 0; x < width; ++x) {
+
+            // y_pow is constant along the row
+            y_pow[0] = 1.0;
+            for (int k = 1; k <= degree; ++k)
+                y_pow[k] = y_pow[k-1] * yn;
+
+            int x = 0;
+#if CV_SIMD_64F
+            if (useVec)
+            {
+                // lanes are consecutive pixels, so each one accumulates the terms in exactly the
+                // order the scalar loop does and the result is unchanged
+                for (; x <= width - vlanes; x += vlanes)
+                {
+                    for (int k = 0; k < vlanes; ++k)
+                        lane_x[k] = (double)(x + k);
+                    const v_float64 vxn = v_mul(v_sub(vx_load(lane_x), vx_setall_f64(mean_x)),
+                                                vx_setall_f64(inv_std_x));
+                    vx_pow[0] = vx_setall_f64(1.0);
+                    for (int k = 1; k <= degree; ++k)
+                        vx_pow[k] = v_mul(vx_pow[k-1], vxn);
+
+                    v_float64 vdx = vx_setzero_f64(), vdy = vx_setzero_f64();
+                    int vidx = 0;
+                    for (int t = 0; t <= degree; ++t){
+                        for (int i = 0; i <= t; ++i){
+                            const v_float64 term = v_mul(vx_pow[i], vx_setall_f64(y_pow[t - i]));
+                            vdx = v_add(vdx, v_mul(vx_setall_f64(Cx[vidx]), term));
+                            vdy = v_add(vdy, v_mul(vx_setall_f64(Cy[vidx]), term));
+                            ++vidx;
+                        }
+                    }
+                    v_store(lane_dx, vdx);
+                    v_store(lane_dy, vdy);
+                    for (int k = 0; k < vlanes; ++k) {
+                        MX[x + k] = (float)(x + k) - (float)lane_dx[k];
+                        MY[x + k] = (float)y - (float)lane_dy[k];
+                    }
+                }
+            }
+#endif
+            for (; x < width; ++x) {
                 const double xn = ((float)x - mean_x) * inv_std_x;
 
-                x_pow[0] = y_pow[0] = 1.0;
-                for (int k = 1; k <= degree; ++k) {
+                x_pow[0] = 1.0;
+                for (int k = 1; k <= degree; ++k)
                     x_pow[k] = x_pow[k-1] * xn;
-                    y_pow[k] = y_pow[k-1] * yn;
-                }
 
                 double dxv = 0.0, dyv = 0.0;
                 int idx = 0;
