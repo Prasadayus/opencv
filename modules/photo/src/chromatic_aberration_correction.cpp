@@ -134,16 +134,8 @@ static void buildRemapsFromCoeffMat(int height, int width,
                   ("width (%d) and height (%d) must be positive", width, height));
     }
 
-    Mat X(1, width, CV_32F), Y(height, 1, CV_32F);
-    for (int i = 0; i < width;  ++i) X.at<float>(0,i) = (float)i;
-    for (int j = 0; j < height; ++j) Y.at<float>(j,0) = (float)j;
-
-    Mat Xgrid, Ygrid;
-    repeat(X, height, 1, Xgrid);
-    repeat(Y, 1, width,  Ygrid);
-
-    Mat dx(height, width, CV_32F);
-    Mat dy(height, width, CV_32F);
+    map_x.create(height, width, CV_32F);
+    map_y.create(height, width, CV_32F);
 
     const double mean_x    = width  * 0.5;
     const double mean_y    = height * 0.5;
@@ -158,13 +150,13 @@ static void buildRemapsFromCoeffMat(int height, int width,
         std::vector<double> x_pow(degree + 1);
         std::vector<double> y_pow(degree + 1);
         for (int y = rows.start; y < rows.end; ++y) {
-            const float* XR = Xgrid.ptr<float>(y);
-            const float* YR = Ygrid.ptr<float>(y);
-            float* DX = dx.ptr<float>(y);
-            float* DY = dy.ptr<float>(y);
+            // the grids held nothing but the loop indices, so the coordinate, the offset and the
+            // final subtraction all stay in registers instead of six full-size float buffers
+            float* MX = map_x.ptr<float>(y);
+            float* MY = map_y.ptr<float>(y);
+            const double yn = ((float)y - mean_y) * inv_std_y;
             for (int x = 0; x < width; ++x) {
-                const double xn = (XR[x] - mean_x) * inv_std_x;
-                const double yn = (YR[x] - mean_y) * inv_std_y;
+                const double xn = ((float)x - mean_x) * inv_std_x;
 
                 x_pow[0] = y_pow[0] = 1.0;
                 for (int k = 1; k <= degree; ++k) {
@@ -184,14 +176,11 @@ static void buildRemapsFromCoeffMat(int height, int width,
                     }
                 }
 
-                DX[x] = (float)dxv;
-                DY[x] = (float)dyv;
+                MX[x] = (float)x - (float)dxv;
+                MY[x] = (float)y - (float)dyv;
             }
         }
     });
-
-    map_x = Xgrid - dx;
-    map_y = Ygrid - dy;
 }
 
 void correctChromaticAberration(InputArray input_image,
