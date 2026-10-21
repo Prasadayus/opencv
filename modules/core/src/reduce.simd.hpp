@@ -11,6 +11,9 @@ typedef void (*ReduceSumFunc)(const Mat& src, Mat& dst);
 ReduceSumFunc getReduceCSumFunc(int sdepth, int ddepth);
 ReduceSumFunc getReduceRSumFunc(int sdepth, int ddepth);
 ReduceSumFunc getReduceRSum2Func(int sdepth, int ddepth);
+ReduceSumFunc getReduceCMaxFunc(int sdepth, int ddepth);
+ReduceSumFunc getReduceCMinFunc(int sdepth, int ddepth);
+ReduceSumFunc getReduceCSum2Func(int sdepth, int ddepth);
 
 #ifndef CV_CPU_OPTIMIZATION_DECLARATIONS_ONLY
 
@@ -789,6 +792,217 @@ static void reduceColSum_64f64f(const Mat& srcmat, Mat& dstmat)
 #endif // CV_SIMD_64F
 
 // =====================================================================
+//  Col reduce MIN/MAX (dim=1): min/max of each row into cn output values
+// =====================================================================
+
+template<bool isMax, typename VecT>
+static inline VecT reduceVMinMax(const VecT& a, const VecT& b)
+{
+    if constexpr (isMax) return v_max(a, b);
+    else                 return v_min(a, b);
+}
+
+template<bool isMax, typename T>
+static inline T reduceSMinMax(T a, T b)
+{
+    if constexpr (isMax) return std::max(a, b);
+    else                 return std::min(a, b);
+}
+
+// Folds src[x0..width) into the cn accumulators, cycling the channel with x.
+// Serves both the vector tail and the cn==3 fallback, so the channel walk lives in one place.
+template<typename T, typename ST, class Fold>
+static inline void reduceColFold(const T* src, ST* dst, int x0, int width, int cn, Fold fold)
+{
+    for (int x = x0, c = 0; x < width; x++, c = (c+1)&-(c < cn-1))
+        dst[c] = fold(dst[c], src[x]);
+}
+
+// A lane maps to a fixed channel only when a vector spans a whole number of
+// pixels, so cn must divide the lane count; cn==3 stays on the scalar path.
+template<typename T, typename VecT, bool isMax>
+static void reduceColMinMax_(const Mat& srcmat, Mat& dstmat)
+{
+    const int cn = srcmat.channels();
+    const int width = srcmat.cols * cn;
+    const int vlanes = VTraits<VecT>::vlanes();
+    const auto fold = [](T a, T b) { return reduceSMinMax<isMax>(a, b); };
+
+    auto body = [&](const Range& range) {
+        AutoBuffer<T> lanebuf(vlanes);
+        T* lane = lanebuf.data();
+        for (int y = range.start; y < range.end; y++)
+        {
+            const T* src = srcmat.ptr<T>(y);
+            T* dst = dstmat.ptr<T>(y);
+
+            if (cn <= vlanes && (vlanes % cn) == 0 && width >= vlanes)
+            {
+                // min/max is idempotent, so each accumulator can start at the first vector
+                VecT a0 = vx_load(src), a1 = a0, a2 = a0, a3 = a0;
+                int x = vlanes;
+                for (; x <= width - vlanes * 4; x += vlanes * 4)
+                {
+                    a0 = reduceVMinMax<isMax>(a0, vx_load(src + x));
+                    a1 = reduceVMinMax<isMax>(a1, vx_load(src + x + vlanes));
+                    a2 = reduceVMinMax<isMax>(a2, vx_load(src + x + vlanes * 2));
+                    a3 = reduceVMinMax<isMax>(a3, vx_load(src + x + vlanes * 3));
+                }
+                a0 = reduceVMinMax<isMax>(reduceVMinMax<isMax>(a0, a1),
+                                          reduceVMinMax<isMax>(a2, a3));
+                for (; x <= width - vlanes; x += vlanes)
+                    a0 = reduceVMinMax<isMax>(a0, vx_load(src + x));
+
+                v_store(lane, a0);
+                for (int c = 0; c < cn; c++)
+                    dst[c] = lane[c];
+                for (int i = cn; i < vlanes; i++)
+                    dst[i % cn] = reduceSMinMax<isMax>(dst[i % cn], lane[i]);
+                // x is a multiple of vlanes and cn divides vlanes, so the tail starts on channel 0
+                reduceColFold(src, dst, x, width, cn, fold);
+            }
+            else
+            {
+                for (int c = 0; c < cn; c++)
+                    dst[c] = src[c];
+                reduceColFold(src, dst, cn, width, cn, fold);
+            }
+        }
+    };
+    parallel_for_(Range(0, srcmat.rows), body);
+    v_cleanup();
+}
+
+static void reduceColMax_8u(const Mat& srcmat, Mat& dstmat)
+{ reduceColMinMax_<uchar, v_uint8, true>(srcmat, dstmat); }
+static void reduceColMin_8u(const Mat& srcmat, Mat& dstmat)
+{ reduceColMinMax_<uchar, v_uint8, false>(srcmat, dstmat); }
+static void reduceColMax_16u(const Mat& srcmat, Mat& dstmat)
+{ reduceColMinMax_<ushort, v_uint16, true>(srcmat, dstmat); }
+static void reduceColMin_16u(const Mat& srcmat, Mat& dstmat)
+{ reduceColMinMax_<ushort, v_uint16, false>(srcmat, dstmat); }
+static void reduceColMax_16s(const Mat& srcmat, Mat& dstmat)
+{ reduceColMinMax_<short, v_int16, true>(srcmat, dstmat); }
+static void reduceColMin_16s(const Mat& srcmat, Mat& dstmat)
+{ reduceColMinMax_<short, v_int16, false>(srcmat, dstmat); }
+static void reduceColMax_32f(const Mat& srcmat, Mat& dstmat)
+{ reduceColMinMax_<float, v_float32, true>(srcmat, dstmat); }
+static void reduceColMin_32f(const Mat& srcmat, Mat& dstmat)
+{ reduceColMinMax_<float, v_float32, false>(srcmat, dstmat); }
+
+// =====================================================================
+//  Col reduce SUM2 (dim=1): sum of squares of each row
+// =====================================================================
+
+// 255*255 fits in u16, so the square is exact before widening. Two's complement
+// addition wraps the same whatever order it is summed in, so this matches the
+// scalar accumulator bit for bit, overflow included.
+static void reduceColSum2_8u32s(const Mat& srcmat, Mat& dstmat)
+{
+    const int cn = srcmat.channels();
+    const int width = srcmat.cols * cn;
+    const int vlanes8 = VTraits<v_uint8>::vlanes();
+    const int vlanes32 = VTraits<v_uint32>::vlanes();
+    const auto fold = [](int a, uchar b) { return a + (int)b * (int)b; };
+
+    auto body = [&](const Range& range) {
+        AutoBuffer<unsigned> lanebuf(vlanes32);
+        unsigned* lane = lanebuf.data();
+        for (int y = range.start; y < range.end; y++)
+        {
+            const uchar* src = srcmat.ptr<uchar>(y);
+            int* dst = dstmat.ptr<int>(y);
+
+            for (int c = 0; c < cn; c++)
+                dst[c] = 0;
+
+            // each u32 accumulator is one quarter of the u8 vector, so cn must divide vlanes32
+            if (cn <= vlanes32 && (vlanes32 % cn) == 0)
+            {
+                v_uint32 a0 = vx_setzero_u32(), a1 = a0, a2 = a0, a3 = a0;
+                int x = 0;
+                for (; x <= width - vlanes8; x += vlanes8)
+                {
+                    v_uint16 lo, hi;
+                    v_expand(vx_load(src + x), lo, hi);
+                    lo = v_mul_wrap(lo, lo);
+                    hi = v_mul_wrap(hi, hi);
+                    v_uint32 q0, q1, q2, q3;
+                    v_expand(lo, q0, q1);
+                    v_expand(hi, q2, q3);
+                    a0 = v_add(a0, q0);
+                    a1 = v_add(a1, q1);
+                    a2 = v_add(a2, q2);
+                    a3 = v_add(a3, q3);
+                }
+                a0 = v_add(v_add(a0, a1), v_add(a2, a3));
+                v_store(lane, a0);
+                for (int i = 0; i < vlanes32; i++)
+                    dst[i % cn] += (int)lane[i];
+                reduceColFold(src, dst, x, width, cn, fold);
+            }
+            else
+                reduceColFold(src, dst, 0, width, cn, fold);
+        }
+    };
+    parallel_for_(Range(0, srcmat.rows), body);
+    v_cleanup();
+}
+
+static void reduceColSum2_32f32f(const Mat& srcmat, Mat& dstmat)
+{
+    const int cn = srcmat.channels();
+    const int width = srcmat.cols * cn;
+    const int vlanes = VTraits<v_float32>::vlanes();
+    const auto fold = [](float a, float b) { return a + b * b; };
+
+    auto body = [&](const Range& range) {
+        AutoBuffer<float> lanebuf(vlanes);
+        float* lane = lanebuf.data();
+        for (int y = range.start; y < range.end; y++)
+        {
+            const float* src = srcmat.ptr<float>(y);
+            float* dst = dstmat.ptr<float>(y);
+
+            for (int c = 0; c < cn; c++)
+                dst[c] = 0.f;
+
+            if (cn <= vlanes && (vlanes % cn) == 0)
+            {
+                v_float32 a0 = vx_setzero_f32(), a1 = a0, a2 = a0, a3 = a0;
+                int x = 0;
+                for (; x <= width - vlanes * 4; x += vlanes * 4)
+                {
+                    v_float32 x0 = vx_load(src + x);
+                    v_float32 x1 = vx_load(src + x + vlanes);
+                    v_float32 x2 = vx_load(src + x + vlanes * 2);
+                    v_float32 x3 = vx_load(src + x + vlanes * 3);
+                    // separate multiply and add: v_fma would round once where the scalar path rounds twice
+                    a0 = v_add(a0, v_mul(x0, x0));
+                    a1 = v_add(a1, v_mul(x1, x1));
+                    a2 = v_add(a2, v_mul(x2, x2));
+                    a3 = v_add(a3, v_mul(x3, x3));
+                }
+                a0 = v_add(v_add(a0, a1), v_add(a2, a3));
+                for (; x <= width - vlanes; x += vlanes)
+                {
+                    v_float32 v = vx_load(src + x);
+                    a0 = v_add(a0, v_mul(v, v));
+                }
+                v_store(lane, a0);
+                for (int i = 0; i < vlanes; i++)
+                    dst[i % cn] += lane[i];
+                reduceColFold(src, dst, x, width, cn, fold);
+            }
+            else
+                reduceColFold(src, dst, 0, width, cn, fold);
+        }
+    };
+    parallel_for_(Range(0, srcmat.rows), body);
+    v_cleanup();
+}
+
+// =====================================================================
 //  Row reduce SUM (dim=0): sum each column across all rows
 // =====================================================================
 
@@ -1271,6 +1485,52 @@ ReduceSumFunc getReduceRSum2Func(int sdepth, int ddepth)
 {
 #if CV_SIMD_SCALABLE
     if (sdepth == CV_32F && ddepth == CV_32F) return reduceRowSum2_32f32f;
+#else
+    CV_UNUSED(sdepth);
+    CV_UNUSED(ddepth);
+#endif
+    return nullptr;
+}
+
+ReduceSumFunc getReduceCMaxFunc(int sdepth, int ddepth)
+{
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+    if (sdepth == ddepth)
+    {
+        if (sdepth == CV_8U) return reduceColMax_8u;
+        if (sdepth == CV_16U) return reduceColMax_16u;
+        if (sdepth == CV_16S) return reduceColMax_16s;
+        if (sdepth == CV_32F) return reduceColMax_32f;
+    }
+#else
+    CV_UNUSED(sdepth);
+    CV_UNUSED(ddepth);
+#endif
+    return nullptr;
+}
+
+ReduceSumFunc getReduceCMinFunc(int sdepth, int ddepth)
+{
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+    if (sdepth == ddepth)
+    {
+        if (sdepth == CV_8U) return reduceColMin_8u;
+        if (sdepth == CV_16U) return reduceColMin_16u;
+        if (sdepth == CV_16S) return reduceColMin_16s;
+        if (sdepth == CV_32F) return reduceColMin_32f;
+    }
+#else
+    CV_UNUSED(sdepth);
+    CV_UNUSED(ddepth);
+#endif
+    return nullptr;
+}
+
+ReduceSumFunc getReduceCSum2Func(int sdepth, int ddepth)
+{
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+    if (sdepth == CV_8U && ddepth == CV_32S) return reduceColSum2_8u32s;
+    if (sdepth == CV_32F && ddepth == CV_32F) return reduceColSum2_32f32f;
 #else
     CV_UNUSED(sdepth);
     CV_UNUSED(ddepth);

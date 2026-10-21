@@ -328,6 +328,9 @@ typedef void (*ReduceSumFunc)(const Mat& src, Mat& dst);
 ReduceSumFunc getReduceCSumFunc(int sdepth, int ddepth);
 ReduceSumFunc getReduceRSumFunc(int sdepth, int ddepth);
 ReduceSumFunc getReduceRSum2Func(int sdepth, int ddepth);
+ReduceSumFunc getReduceCMaxFunc(int sdepth, int ddepth);
+ReduceSumFunc getReduceCMinFunc(int sdepth, int ddepth);
+ReduceSumFunc getReduceCSum2Func(int sdepth, int ddepth);
 
 template <typename T, typename WT, typename Op>
 struct ReduceR_SIMD
@@ -927,7 +930,10 @@ void cv::reduce(InputArray _src, OutputArray _dst, int dim, int op, int dtype)
         }
         else if(op == REDUCE_MAX)
         {
-            if(sdepth == CV_8U && ddepth == CV_8U)
+            ReduceSumFunc simd_func = getReduceCMaxFunc(sdepth, ddepth);
+            if(simd_func)
+                func = (ReduceFunc)simd_func;
+            else if(sdepth == CV_8U && ddepth == CV_8U)
                 func = reduceMaxC8u;
             else if(sdepth == CV_16U && ddepth == CV_16U)
                 func = reduceMaxC16u;
@@ -940,7 +946,10 @@ void cv::reduce(InputArray _src, OutputArray _dst, int dim, int op, int dtype)
         }
         else if(op == REDUCE_MIN)
         {
-            if(sdepth == CV_8U && ddepth == CV_8U)
+            ReduceSumFunc simd_func = getReduceCMinFunc(sdepth, ddepth);
+            if(simd_func)
+                func = (ReduceFunc)simd_func;
+            else if(sdepth == CV_8U && ddepth == CV_8U)
                 func = reduceMinC8u;
             else if(sdepth == CV_16U && ddepth == CV_16U)
                 func = reduceMinC16u;
@@ -953,7 +962,10 @@ void cv::reduce(InputArray _src, OutputArray _dst, int dim, int op, int dtype)
         }
         else if(op == REDUCE_SUM2)
         {
-            if(sdepth == CV_8U && ddepth == CV_32S)
+            ReduceSumFunc simd_func = getReduceCSum2Func(sdepth, ddepth);
+            if(simd_func)
+                func = (ReduceFunc)simd_func;
+            else if(sdepth == CV_8U && ddepth == CV_32S)
                 func = reduceSum2C8u32s;
             else if(sdepth == CV_8U && ddepth == CV_32F)
                 func = reduceSum2C8u32f;

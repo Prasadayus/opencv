@@ -1142,6 +1142,81 @@ protected:
 };
 
 TEST(Core_Reduce, accuracy) { Core_ReduceTest test; test.safe_run(); }
+// Core_Reduce.accuracy asserts src.channels()==1, so the multichannel paths are
+// unchecked. Widths are picked to land on and off the vector tail.
+TEST(Core_Reduce, multichannel_accuracy)
+{
+    RNG& rng = theRNG();
+    const int depths[] = { CV_8U, CV_16U, CV_16S, CV_32F };
+    const int widths[] = { 1, 3, 7, 16, 17, 61, 64, 127 };
+    const int ops[] = { REDUCE_MAX, REDUCE_MIN, REDUCE_SUM2 };
+
+    for( size_t di = 0; di < sizeof(depths)/sizeof(depths[0]); di++ )
+    {
+        const int depth = depths[di];
+        const double lo = depth == CV_16S ? -32768 : (depth == CV_32F ? -1000 : 0);
+        const double hi = depth == CV_8U ? 256 :
+                          (depth == CV_16U ? 65536 : (depth == CV_16S ? 32768 : 1000));
+
+        for( int cn = 1; cn <= 4; cn++ )
+        for( size_t wi = 0; wi < sizeof(widths)/sizeof(widths[0]); wi++ )
+        {
+            Mat src( Size(widths[wi], 5), CV_MAKETYPE(depth, cn) );
+            rng.fill( src, RNG::UNIFORM, lo, hi, true );
+            Mat srcd;
+            src.convertTo( srcd, CV_64F );
+
+            for( size_t oi = 0; oi < sizeof(ops)/sizeof(ops[0]); oi++ )
+            {
+                const int op = ops[oi];
+                if( op == REDUCE_SUM2 && depth != CV_8U && depth != CV_32F )
+                    continue;
+                const int ddepth = op == REDUCE_SUM2
+                                 ? (depth == CV_8U ? CV_32S : CV_32F) : depth;
+
+                for( int dim = 0; dim <= 1; dim++ )
+                {
+                    Mat dst;
+                    reduce( src, dst, dim, op, ddepth );
+
+                    const int outer = dim == 0 ? src.cols : src.rows;
+                    const int inner = dim == 0 ? src.rows : src.cols;
+                    Mat ref( dim == 0 ? 1 : src.rows, dim == 0 ? src.cols : 1,
+                             CV_MAKETYPE(CV_64F, cn) );
+
+                    for( int o = 0; o < outer; o++ )
+                        for( int c = 0; c < cn; c++ )
+                        {
+                            double acc = 0;
+                            for( int i = 0; i < inner; i++ )
+                            {
+                                const int r = dim == 0 ? i : o;
+                                const int cc = dim == 0 ? o : i;
+                                const double v = srcd.ptr<double>(r)[cc*cn + c];
+                                if( op == REDUCE_MAX )
+                                    acc = i == 0 ? v : std::max(acc, v);
+                                else if( op == REDUCE_MIN )
+                                    acc = i == 0 ? v : std::min(acc, v);
+                                else
+                                    acc += v*v;
+                            }
+                            ref.ptr<double>(dim == 0 ? 0 : o)[(dim == 0 ? o : 0)*cn + c] = acc;
+                        }
+
+                    Mat dstd;
+                    dst.convertTo( dstd, CV_64F );
+                    // float sum of squares accumulates in a different order than the reference
+                    const double tol = (op == REDUCE_SUM2 && depth == CV_32F)
+                                     ? 1e-4 * std::max(1.0, cv::norm(ref, NORM_INF)) : 0.0;
+                    EXPECT_LE( cv::norm(dstd, ref, NORM_INF), tol )
+                        << "depth=" << depth << " cn=" << cn << " width=" << widths[wi]
+                        << " op=" << op << " dim=" << dim;
+                }
+            }
+        }
+    }
+}
+
 TEST(Core_Array, basic_operations) { Core_ArrayOpTest test; test.safe_run(); }
 
 TEST(Core_Merge, shape_operations) { Core_MergeTest test; test.safe_run(); }
