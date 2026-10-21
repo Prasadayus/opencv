@@ -776,28 +776,41 @@ namespace
         const int angleRange = cvCeil((maxAngle_ - minAngle_) * iAngleStep);
 
         std::vector<int> OHist(angleRange + 1, 0);
-        for (int i = 0; i <= levels_; ++i)
+
+        // Levels are independent and the histogram is only a few dozen ints, so each stripe votes
+        // into its own copy and merges at the end. Integer counts, so merge order cannot matter.
+        Mutex histMutex;
+        parallel_for_(Range(0, levels_ + 1), [&](const Range& range)
         {
-            const std::vector<Feature>& templRow = templFeatures_[i];
-            const std::vector<Feature>& imageRow = imageFeatures_[i];
+            std::vector<int> localHist(angleRange + 1, 0);
 
-            for (size_t j = 0; j < templRow.size(); ++j)
+            for (int i = range.start; i < range.end; ++i)
             {
-                Feature templF = templRow[j];
+                const std::vector<Feature>& templRow = templFeatures_[i];
+                const std::vector<Feature>& imageRow = imageFeatures_[i];
 
-                for (size_t k = 0; k < imageRow.size(); ++k)
+                for (size_t j = 0; j < templRow.size(); ++j)
                 {
-                    Feature imF = imageRow[k];
+                    Feature templF = templRow[j];
 
-                    const double angle = clampAngle(imF.p1.theta - templF.p1.theta);
-                    if (angle >= minAngle_ && angle <= maxAngle_)
+                    for (size_t k = 0; k < imageRow.size(); ++k)
                     {
-                        const int n = cvRound((angle - minAngle_) * iAngleStep);
-                        ++OHist[n];
+                        Feature imF = imageRow[k];
+
+                        const double angle = clampAngle(imF.p1.theta - templF.p1.theta);
+                        if (angle >= minAngle_ && angle <= maxAngle_)
+                        {
+                            const int n = cvRound((angle - minAngle_) * iAngleStep);
+                            ++localHist[n];
+                        }
                     }
                 }
             }
-        }
+
+            AutoLock lock(histMutex);
+            for (int n = 0; n <= angleRange; ++n)
+                OHist[n] += localHist[n];
+        });
 
         angles_.clear();
 
@@ -825,33 +838,43 @@ namespace
 
         std::vector<int> SHist(scaleRange + 1, 0);
 
-        for (int i = 0; i <= levels_; ++i)
+        Mutex histMutex;
+        parallel_for_(Range(0, levels_ + 1), [&](const Range& range)
         {
-            const std::vector<Feature>& templRow = templFeatures_[i];
-            const std::vector<Feature>& imageRow = imageFeatures_[i];
+            std::vector<int> localHist(scaleRange + 1, 0);
 
-            for (size_t j = 0; j < templRow.size(); ++j)
+            for (int i = range.start; i < range.end; ++i)
             {
-                Feature templF = templRow[j];
+                const std::vector<Feature>& templRow = templFeatures_[i];
+                const std::vector<Feature>& imageRow = imageFeatures_[i];
 
-                templF.p1.theta += angle;
-
-                for (size_t k = 0; k < imageRow.size(); ++k)
+                for (size_t j = 0; j < templRow.size(); ++j)
                 {
-                    Feature imF = imageRow[k];
+                    Feature templF = templRow[j];
 
-                    if (angleEq(imF.p1.theta, templF.p1.theta, angleEpsilon_))
+                    templF.p1.theta += angle;
+
+                    for (size_t k = 0; k < imageRow.size(); ++k)
                     {
-                        const double scale = imF.d12 / templF.d12;
-                        if (scale >= minScale_ && scale <= maxScale_)
+                        Feature imF = imageRow[k];
+
+                        if (angleEq(imF.p1.theta, templF.p1.theta, angleEpsilon_))
                         {
-                            const int s = cvRound((scale - minScale_) * iScaleStep);
-                            ++SHist[s];
+                            const double scale = imF.d12 / templF.d12;
+                            if (scale >= minScale_ && scale <= maxScale_)
+                            {
+                                const int s = cvRound((scale - minScale_) * iScaleStep);
+                                ++localHist[s];
+                            }
                         }
                     }
                 }
             }
-        }
+
+            AutoLock lock(histMutex);
+            for (int s = 0; s <= scaleRange; ++s)
+                SHist[s] += localHist[s];
+        });
 
         scales_.clear();
 
@@ -882,46 +905,56 @@ namespace
 
         Mat DHist(histRows + 2, histCols + 2, CV_32SC1, Scalar::all(0));
 
-        for (int i = 0; i <= levels_; ++i)
+        // This histogram is the size of the image, so per-stripe copies would cost more to
+        // allocate and zero than the voting itself. The angleEq filter leaves the votes sparse,
+        // so the shared histogram is incremented atomically instead. Counts are integers, so the
+        // totals do not depend on the order the stripes land in.
+        int* const histData = DHist.ptr<int>();
+        const size_t histStride = DHist.step / sizeof(int);
+
+        parallel_for_(Range(0, levels_ + 1), [&](const Range& range)
         {
-            const std::vector<Feature>& templRow = templFeatures_[i];
-            const std::vector<Feature>& imageRow = imageFeatures_[i];
-
-            for (size_t j = 0; j < templRow.size(); ++j)
+            for (int i = range.start; i < range.end; ++i)
             {
-                Feature templF = templRow[j];
+                const std::vector<Feature>& templRow = templFeatures_[i];
+                const std::vector<Feature>& imageRow = imageFeatures_[i];
 
-                templF.p1.theta += angle;
-
-                templF.r1 *= scale;
-                templF.r2 *= scale;
-
-                templF.r1 = Point2d(cosVal * templF.r1.x - sinVal * templF.r1.y, sinVal * templF.r1.x + cosVal * templF.r1.y);
-                templF.r2 = Point2d(cosVal * templF.r2.x - sinVal * templF.r2.y, sinVal * templF.r2.x + cosVal * templF.r2.y);
-
-                for (size_t k = 0; k < imageRow.size(); ++k)
+                for (size_t j = 0; j < templRow.size(); ++j)
                 {
-                    Feature imF = imageRow[k];
+                    Feature templF = templRow[j];
 
-                    if (angleEq(imF.p1.theta, templF.p1.theta, angleEpsilon_))
+                    templF.p1.theta += angle;
+
+                    templF.r1 *= scale;
+                    templF.r2 *= scale;
+
+                    templF.r1 = Point2d(cosVal * templF.r1.x - sinVal * templF.r1.y, sinVal * templF.r1.x + cosVal * templF.r1.y);
+                    templF.r2 = Point2d(cosVal * templF.r2.x - sinVal * templF.r2.y, sinVal * templF.r2.x + cosVal * templF.r2.y);
+
+                    for (size_t k = 0; k < imageRow.size(); ++k)
                     {
-                        Point2d c1, c2;
+                        Feature imF = imageRow[k];
 
-                        c1 = imF.p1.pos - templF.r1;
-                        c1 *= idp;
+                        if (angleEq(imF.p1.theta, templF.p1.theta, angleEpsilon_))
+                        {
+                            Point2d c1, c2;
 
-                        c2 = imF.p2.pos - templF.r2;
-                        c2 *= idp;
+                            c1 = imF.p1.pos - templF.r1;
+                            c1 *= idp;
 
-                        if (fabs(c1.x - c2.x) > 1 || fabs(c1.y - c2.y) > 1)
-                            continue;
+                            c2 = imF.p2.pos - templF.r2;
+                            c2 *= idp;
 
-                        if (c1.y >= 0 && c1.y < histRows && c1.x >= 0 && c1.x < histCols)
-                            ++DHist.at<int>(cvRound(c1.y) + 1, cvRound(c1.x) + 1);
+                            if (fabs(c1.x - c2.x) > 1 || fabs(c1.y - c2.y) > 1)
+                                continue;
+
+                            if (c1.y >= 0 && c1.y < histRows && c1.x >= 0 && c1.x < histCols)
+                                CV_XADD(histData + (cvRound(c1.y) + 1) * histStride + cvRound(c1.x) + 1, 1);
+                        }
                     }
                 }
             }
-        }
+        });
 
         for(int y = 0; y < histRows; ++y)
         {
