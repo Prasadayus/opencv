@@ -11,11 +11,13 @@
 #include <cstring>
 #include <cstdio>
 #include <cmath>
+#include <cfloat>
 
 #define ARMPL_GEMM_MIN_WORK_VOLUME 10000
 #define ARMPL_SVD_NO_UV_SMALL_MATRIX_THRESH 16
 #define ARMPL_SVD_UV_SMALL_MATRIX_THRESH 48
 #define ARMPL_LU_SMALL_MATRIX_THRESH 100
+#define ARMPL_QR_SMALL_MATRIX_THRESH ARMPL_LU_SMALL_MATRIX_THRESH
 
 namespace {
 
@@ -239,6 +241,74 @@ armpl_lu(fptype *a, size_t a_step, int m, fptype *b, size_t b_step, int n, int *
     return CV_HAL_ERROR_OK;
 }
 
+static inline armpl_int_t armpl_lapacke_gels(int m, int n, int k, float *a, int lda, float *b, int ldb){
+    return LAPACKE_sgels(LAPACK_ROW_MAJOR, 'N', m, n, k, a, lda, b, ldb);
+}
+static inline armpl_int_t armpl_lapacke_gels(int m, int n, int k, double *a, int lda, double *b, int ldb){
+    return LAPACKE_dgels(LAPACK_ROW_MAJOR, 'N', m, n, k, a, lda, b, ldb);
+}
+static inline armpl_int_t armpl_lapacke_geqrf(int m, int n, float *a, int lda, float *tau){
+    return LAPACKE_sgeqrf(LAPACK_ROW_MAJOR, m, n, a, lda, tau);
+}
+static inline armpl_int_t armpl_lapacke_geqrf(int m, int n, double *a, int lda, double *tau){
+    return LAPACKE_dgeqrf(LAPACK_ROW_MAJOR, m, n, a, lda, tau);
+}
+
+static inline float  armpl_qr_rank_eps(float)  { return FLT_EPSILON * 10; }
+static inline double armpl_qr_rank_eps(double) { return DBL_EPSILON * 100; }
+
+template <typename fptype> static inline int
+armpl_qr(fptype *a, size_t a_step, int m, int n, int k, fptype *b, size_t b_step, fptype *dst, int *info)
+{
+    if(!info || m < n)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    ArmplSingleThread single_thread((double)m * n * (n + (b ? k : 0)));
+    int lda = (int)(a_step / sizeof(fptype));
+    armpl_int_t linfo;
+
+    if (b)
+    {
+        int ldb = (int)(b_step / sizeof(fptype));
+        linfo = armpl_lapacke_gels(m, n, k, a, lda, b, ldb);
+    }
+    else
+    {
+        if (!dst)
+            return CV_HAL_ERROR_NOT_IMPLEMENTED;
+        linfo = armpl_lapacke_geqrf(m, n, a, lda, dst);
+    }
+
+    if (linfo < 0)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+
+    // OpenCV inverts the LAPACK convention here: zero info means the decomposition failed
+    *info = (linfo == 0);
+
+    // ?gels only flags rank deficiency on an exactly zero pivot, so a near-singular
+    // system comes back as a successful solve. OpenCV's own QR rejects it
+    // (matrix_decomp.cpp:284); the test is made relative to the largest pivot here
+    // because its absolute form misses a matrix whose entries are far from unit scale.
+    if (b && *info)
+    {
+        fptype rmax = 0;
+        for (int i = 0; i < n; i++)
+            rmax = std::max(rmax, std::abs(a[i*lda + i]));
+
+        const fptype tol = armpl_qr_rank_eps((fptype)0) * rmax;
+        for (int i = 0; i < n; i++)
+        {
+            if (std::abs(a[i*lda + i]) <= tol)
+            {
+                *info = 0;
+                break;
+            }
+        }
+    }
+
+    return CV_HAL_ERROR_OK;
+}
+
 namespace {
 
 static inline armpl_int_t
@@ -311,6 +381,17 @@ int armpl_hal_LU64f(double *a, size_t a_step, int m, double *b, size_t b_step, i
     if (m < ARMPL_LU_SMALL_MATRIX_THRESH)
         return CV_HAL_ERROR_NOT_IMPLEMENTED;
     return armpl_lu(a, a_step, m, b, b_step, n, info);
+}
+
+int armpl_hal_QR32f(float *a, size_t a_step, int m, int n, int k, float *b, size_t b_step, float *dst, int *info) {
+    if (m < ARMPL_QR_SMALL_MATRIX_THRESH)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+    return armpl_qr(a, a_step, m, n, k, b, b_step, dst, info);
+}
+int armpl_hal_QR64f(double *a, size_t a_step, int m, int n, int k, double *b, size_t b_step, double *dst, int *info) {
+    if (m < ARMPL_QR_SMALL_MATRIX_THRESH)
+        return CV_HAL_ERROR_NOT_IMPLEMENTED;
+    return armpl_qr(a, a_step, m, n, k, b, b_step, dst, info);
 }
 
 int armpl_hal_SVD32f_impl(float *src, size_t src_step, float *w, float *u, size_t u_step, float *vt, size_t vt_step, int m, int n, int flags)

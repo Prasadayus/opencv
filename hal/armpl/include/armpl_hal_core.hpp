@@ -130,6 +130,14 @@ int armpl_hal_LU64f(double* a, size_t a_step, int m, double* b, size_t b_step, i
 #undef  cv_hal_LU64f
 #define cv_hal_LU64f armpl_hal_LU64f
 
+int armpl_hal_QR32f(float* a, size_t a_step, int m, int n, int k, float* b, size_t b_step, float* dst, int* info);
+int armpl_hal_QR64f(double* a, size_t a_step, int m, int n, int k, double* b, size_t b_step, double* dst, int* info);
+
+#undef  cv_hal_QR32f
+#define cv_hal_QR32f armpl_hal_QR32f
+#undef  cv_hal_QR64f
+#define cv_hal_QR64f armpl_hal_QR64f
+
 #endif  // HAVE_ARMPL
 
 #endif  // OPENCV_ARMPL_HAL_CORE_HPP
