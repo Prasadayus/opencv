@@ -55,9 +55,9 @@ CV__DNN_INLINE_NS_BEGIN
 
   Classes listed here, in fact, provides C++ API for creating instances of built-in layers.
   In addition to this way of layers instantiation, there is a more common factory API (see @ref dnnLayerFactory), it allows to create layers dynamically (by name) and register new ones.
-  You can use both API, but factory API is less convenient for native C++ programming and basically designed for use inside importers (see @ref readNetFromTensorflow()).
+  You can use both API, but factory API is less convenient for native C++ programming and basically designed for use inside importers (see @ref readNetFromONNX()).
 
-  Built-in layers reproduce the functionality of the corresponding ONNX and TensorFlow operators.
+  Built-in layers reproduce the functionality of the corresponding ONNX operators.
   The following layers are among the core building blocks used to assemble imported networks:
   - Convolution
   - Deconvolution
@@ -420,6 +420,7 @@ CV__DNN_INLINE_NS_BEGIN
         float input_sc, output_sc;
         bool per_channel;
         bool float_input = false;
+        bool int32_output = false; // ONNX ConvInteger: int32 sums, zero points are inputs
 
         std::vector<int> strides, dilations, pads;
         int ngroups;
@@ -1924,6 +1925,15 @@ CV__DNN_INLINE_NS_BEGIN
         float input_sc, output_sc;
         int output_type;
         bool per_channel;
+        //! ONNX MatMulInteger (opset 10) mode: int32 output, B and both zero points are inputs
+        bool int32_output = false;
+
+        /** @brief Creates the ONNX MatMulInteger form of the layer.
+         * @param params layer parameters; "int32_output" must be true, because the requantizing
+         *        int8 form is built only from MatMulInt8Params, by the QDQ fusion
+         * @return the MatMulInteger layer: Y = (A - a_zero_point) * (B - b_zero_point) in int32
+         */
+        static Ptr<MatMulInt8Layer> create(const LayerParams& params);
         static Ptr<MatMulInt8Layer> create(const MatMulInt8Params& params);
     };
 

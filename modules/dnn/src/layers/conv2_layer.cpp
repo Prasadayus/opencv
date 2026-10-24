@@ -954,11 +954,8 @@ public:
         });
         if (activationFunc) {
             float* dst = out;
-            const int total = K1 * HW * 8;
-            const float* prm = activParams.empty() ? nullptr : activParams.data();
-            parallel_for_(Range(0, total), [&](const Range& r) {
-                activationFunc(dst + r.start, dst + r.start, (size_t)(r.end - r.start), prm);
-            });
+            int total = K1 * HW * 8;
+            activationFunc(dst, dst, total, activParams.data());
         }
     }
 
@@ -1025,8 +1022,6 @@ public:
     {
         if (origWeights.empty() || wshape0.dims != 4)  // [Cout, Cin/group, kh, kw] (2D conv)
             return false;
-        if (auto_pad != AUTO_PAD_NONE && auto_pad != AUTO_PAD_VALID)
-            return false;
         if (activationFunc != nullptr || !activ.empty())
             return false;
         if (fastActivation != FAST_ACTIV_NONE && fastActivation != FAST_ACTIV_RELU &&
@@ -1052,8 +1047,14 @@ public:
         } else {
             config.padMode = ConvolutionConfiguration::PaddingMode::MANUAL;
             for (int i = 0; i < nspatial; i++) {
-                config.pads_begin.push_back(pads.empty() ? 0 : (size_t)pads[i]);
-                config.pads_end.push_back(pads.empty() ? 0 : (size_t)pads[i + nspatial]);
+                int pad0, pad1;
+                getPadding(pads, i, nspatial, auto_pad,
+                           {(int)wshape0[2 + i], inpShape[i + 2],
+                            strides.empty() ? 1 : strides[i],
+                            dilations.empty() ? 1 : dilations[i]},
+                           pad0, pad1);
+                config.pads_begin.push_back((size_t)pad0);
+                config.pads_end.push_back((size_t)pad1);
             }
         }
         config.input_shape.assign(inpShape.begin(), inpShape.end());

@@ -434,6 +434,40 @@ TEST_P(Test_ONNX_layers, Deconvolution)
     // out_channels == C0, so NK1 == 1: exercises computeSpatChunks()'s spatial
     // split in conv2_deconv.cpp regardless of thread count.
     testONNXModels("deconv_spatial_narrow", npy, 0, 0, false, false);
+    // GEMM + col2im paths: one tap per output pixel, overlapping taps split into channel chunks,
+    // and a second group that starts inside a channel block.
+    testONNXModels("deconv_k2s2", npy, 0, 0, false, false);
+    testONNXModels("deconv_overlap_chunks", npy, 0, 0, false, false);
+    testONNXModels("deconv_overlap_groups", npy, 0, 0, false, false);
+}
+
+// Zero batch or spatial size: the output is empty or holds only the bias, which is arange(12).
+TEST_P(Test_ONNX_layers, Deconvolution_empty)
+{
+    if (backend != DNN_BACKEND_OPENCV || target != DNN_TARGET_CPU)
+        throw SkipTestException("Only CPU is supported");
+
+    struct Case { const char* model; std::vector<int> inpshape, outshape; };
+    const Case cases[] = {
+        {"deconv_empty_k1", {1, 4, 0, 5}, {1, 12, 0, 5}},
+        {"deconv_empty_k3", {1, 4, 0, 5}, {1, 12, 2, 7}},
+        {"deconv_empty_k3", {0, 4, 5, 5}, {0, 12, 7, 7}},
+    };
+    for (const Case& c : cases)
+    {
+        const std::string path = std::string("dnn/onnx/models/") + c.model + ".onnx";
+        Net net = readNetFromONNX(findDataFile(path, true));
+        net.setPreferableBackend(backend);
+        net.setPreferableTarget(target);
+        net.setInput(Mat(c.inpshape, CV_32F));
+        Mat out = net.forward();
+
+        ASSERT_EQ(std::vector<int>(out.size.p, out.size.p + out.dims), c.outshape) << c.model;
+        const int K = c.outshape[1], plane = c.outshape[2] * c.outshape[3];
+        const float* data = out.ptr<float>();
+        for (size_t i = 0; i < out.total(); i++)
+            ASSERT_EQ(data[i], (float)(i / plane % K)) << c.model << " at " << i;
+    }
 }
 
 TEST_P(Test_ONNX_layers, Deconvolution3D)
@@ -2347,6 +2381,69 @@ TEST_P(Test_ONNX_layers, Quantized_Convolution)
     }
 }
 
+TEST_P(Test_ONNX_layers, ConvInteger)
+{
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NGRAPH)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_NGRAPH);
+
+    testONNXModels("convinteger_u8");
+    testONNXModels("convinteger_depthwise");
+    testONNXModels("convinteger_1x1");
+    testONNXModels("convinteger_s8");
+    testONNXModels("convinteger_full_range_weights");
+    testONNXModels("convinteger_groups");
+    testONNXModels("convinteger_1d");
+    testONNXModels("convinteger_runtime_weights", npy, 0, 0, false, true, 2);
+    testONNXModels("convinteger_dynamic");
+
+    // the second input gives DynamicQuantizeLinear another zero point on the same net
+    Net net = readNetFromONNX(_tf("models/convinteger_dynamic.onnx"));
+    ASSERT_FALSE(net.empty());
+    net.setPreferableBackend(backend);
+    net.setPreferableTarget(target);
+    for (const String set : {"", "_set2"}) {
+        net.setInput(blobFromNPY(_tf("data/input_convinteger_dynamic" + set + ".npy")));
+        Mat ref = blobFromNPY(_tf("data/output_convinteger_dynamic" + set + ".npy"));
+        normAssert(ref, net.forward(), set.c_str());
+    }
+}
+
+TEST_P(Test_ONNX_layers, MatMulInteger)
+{
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NGRAPH)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_NGRAPH);
+
+    testONNXModels("matmulinteger_u8_per_column");
+    testONNXModels("matmulinteger_s8_weights");
+    testONNXModels("matmulinteger_full_range_weights");
+    testONNXModels("matmulinteger_s8");
+    testONNXModels("matmulinteger_runtime_weights", npy, 0, 0, false, true, 2);
+    testONNXModels("matmulinteger_b_zero_point_only");
+    testONNXModels("matmulinteger_transposed_a");
+    testONNXModels("matmulinteger_k1_n1");
+    testONNXModels("matmulinteger_extremes");
+    testONNXModels("matmulinteger_extremes_s8");
+    testONNXModels("matmulinteger_batched_b");
+    testONNXModels("matmulinteger_batched_s8");
+    testONNXModels("matmulinteger_vector_a");
+    testONNXModels("matmulinteger_b_vector");
+    testONNXModels("matmulinteger_vector_vector");
+    testONNXModels("matmulinteger_a_zp_per_row");
+    testONNXModels("matmulinteger_a_zp_per_row_nd");
+    testONNXModels("matmulinteger_dynamic");
+
+    // the second input gives DynamicQuantizeLinear another zero point on the same net
+    Net net = readNetFromONNX(_tf("models/matmulinteger_dynamic.onnx"));
+    ASSERT_FALSE(net.empty());
+    net.setPreferableBackend(backend);
+    net.setPreferableTarget(target);
+    for (const String set : {"", "_set2"}) {
+        net.setInput(blobFromNPY(_tf("data/input_matmulinteger_dynamic" + set + ".npy")));
+        Mat ref = blobFromNPY(_tf("data/output_matmulinteger_dynamic" + set + ".npy"));
+        normAssert(ref, net.forward(), set.c_str());
+    }
+}
+
 TEST_P(Test_ONNX_layers, Quantized_MatMul)
 {
     testONNXModels("quantized_matmul_uint8_weights", npy, 0.008, 0.015);
@@ -2385,6 +2482,11 @@ TEST_P(Test_ONNX_layers, Quantized_Eltwise_Scalar)
 TEST_P(Test_ONNX_layers, Quantized_Eltwise_Broadcast)
 {
     testONNXModels("quantized_eltwise_broadcast");
+}
+
+TEST_P(Test_ONNX_layers, Quantized_BatchNorm_Mul_Add)
+{
+    testONNXModels("quantized_bn_mul_add");
 }
 
 TEST_P(Test_ONNX_layers, Quantized_LeakyReLU)
@@ -3896,5 +3998,27 @@ INSTANTIATE_TEST_CASE_P(/**/, Test_ONNX_MHA_Lowering, testing::Values(
     "multi_head_attention_key_padding_mask_in_graph",
     "multi_head_attention_key_padding_mask_attention_bias"
 ));
+
+// QLinearConv folds a const int32 bias to float by multiplying each bias element
+// by the matching per-channel weight scale, writing into a buffer sized from the
+// bias tensor. w_scale and the bias are independent model fields, so a w_scale
+// longer than the bias wrote past the bias buffer during import. The mismatched
+// pair has to be rejected instead of overrunning the buffer.
+// Test data in opencv_extra under the same branch name as this patch.
+TEST(Test_ONNX_importer, parse_qconv_bias_scale_mismatch)
+{
+    Net net;
+    EXPECT_NO_THROW(net = readNetFromONNX(_tf("models/qconv_bias_scale_mismatch.onnx")));
+    EXPECT_TRUE(net.empty());
+}
+
+// The same bias fold reads the scalar x_scale unconditionally, so an empty
+// x_scale has to be rejected instead of being read past its end.
+TEST(Test_ONNX_importer, parse_qconv_empty_x_scale)
+{
+    Net net;
+    EXPECT_NO_THROW(net = readNetFromONNX(_tf("models/qconv_empty_x_scale.onnx")));
+    EXPECT_TRUE(net.empty());
+}
 
 }} // namespace
