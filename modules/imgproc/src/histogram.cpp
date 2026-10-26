@@ -2601,7 +2601,7 @@ void cv::equalizeHist( InputArray _src, OutputArray _dst )
     cv::Range heightRange(0, src.rows);
 
     if(EqualizeHistCalcHist_Invoker::isWorthParallel(src))
-        parallel_for_(heightRange, calcBody);
+        parallel_for_(heightRange, calcBody, src.total()/(double)(1<<16));
     else
         calcBody(heightRange);
 
@@ -2631,7 +2631,7 @@ void cv::equalizeHist( InputArray _src, OutputArray _dst )
     EqualizeHistLut_Invoker lutBody(src, dst, lut_u8);
 
     if(EqualizeHistLut_Invoker::isWorthParallel(src))
-        parallel_for_(heightRange, lutBody);
+        parallel_for_(heightRange, lutBody, src.total()/(double)(1<<16));
     else
         lutBody(heightRange);
 }
