@@ -50,7 +50,18 @@
 namespace cv
 {
 
-static int CV_KMEANS_PARALLEL_GRANULARITY = (int)utils::getConfigurationParameterSizeT("OPENCV_KMEANS_PARALLEL_GRANULARITY", 1000);
+// Work per stripe. PPL charges far more to dispatch a task than pthreads or TBB, so the shared
+// default leaves kmeans ~3x slower on 12 threads than on 1 here, while Linux is unaffected.
+static int kmeansParallelGranularity()
+{
+    static const int granularity = []() -> int
+    {
+        const char* framework = currentParallelFramework();
+        const size_t dflt = (framework && strcmp(framework, "ms-concurrency") == 0) ? 10000 : 1000;
+        return (int)utils::getConfigurationParameterSizeT("OPENCV_KMEANS_PARALLEL_GRANULARITY", dflt);
+    }();
+    return granularity;
+}
 
 static void generateRandomCenter(int dims, const Vec2f* box, float* center, RNG& rng)
 {
@@ -131,7 +142,7 @@ static bool generateCentersPP(const Mat& data, Mat& _out_centers,
 
             parallel_for_(Range(0, N),
                           KMeansPPDistanceComputer(tdist2, data, dist, ci),
-                          (double)divUp((size_t)(dims * N), CV_KMEANS_PARALLEL_GRANULARITY));
+                          (double)divUp((size_t)(dims * N), kmeansParallelGranularity()));
             double s = 0;
             int i = 0;
         #if CV_ENABLE_UNROLLED
@@ -453,14 +464,14 @@ double cv::kmeans( InputArray _data, int K,
             if (isLastIter)
             {
                 // don't re-assign labels to avoid creation of empty clusters
-                parallel_for_(Range(0, N), KMeansDistanceComputer<true>(dists.data(), labels, data, centers), (double)divUp((size_t)(dims * N), CV_KMEANS_PARALLEL_GRANULARITY));
+                parallel_for_(Range(0, N), KMeansDistanceComputer<true>(dists.data(), labels, data, centers), (double)divUp((size_t)(dims * N), kmeansParallelGranularity()));
                 compactness = sum(Mat(Size(N, 1), CV_64F, &dists[0]))[0];
                 break;
             }
             else
             {
                 // assign labels
-                parallel_for_(Range(0, N), KMeansDistanceComputer<false>(dists.data(), labels, data, centers), (double)divUp((size_t)(dims * N * K), CV_KMEANS_PARALLEL_GRANULARITY));
+                parallel_for_(Range(0, N), KMeansDistanceComputer<false>(dists.data(), labels, data, centers), (double)divUp((size_t)(dims * N * K), kmeansParallelGranularity()));
                 if (!(sum(Mat(Size(N, 1), CV_64F, &dists[0]))[0] < DBL_MAX))
                     break;
             }
