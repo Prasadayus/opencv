@@ -736,12 +736,20 @@ struct RGB2Gray<uchar>
 
 #if (CV_SIMD || CV_SIMD_SCALABLE)
         const int vsize = VTraits<v_uint8>::vlanes();
+#if CV_NEON
+        // The zip/dotprod form below pairs the channels so one pmaddwd is a widening
+        // multiply-add. NEON has no pmaddwd and v_dotprod unzips the pair straight back,
+        // so there the plain widening multiply is cheaper.
+        v_int16 vcb = vx_setall_s16(cb), vcg = vx_setall_s16(cg), vcr = vx_setall_s16(cr);
+        v_int32 vdelta = vx_setall_s32(1 << (shift-1));
+#else
         v_int16 bg2y;
         v_int16 r12y;
         v_int16 dummy;
         v_zip(vx_setall_s16(cb), vx_setall_s16(cg), bg2y, dummy);
         v_zip(vx_setall_s16(cr), vx_setall_s16( 1), r12y, dummy);
         v_int16 delta = vx_setall_s16(1 << (shift-1));
+#endif
 
         for( ; i < n;
              i += vsize, src += scn*vsize, dst += vsize)
@@ -772,6 +780,20 @@ struct RGB2Gray<uchar>
             v_expand(g, g0, g1);
             v_expand(b, b0, b1);
 
+            v_uint32 y00, y01, y10, y11;
+#if CV_NEON
+            v_int32 bl, bh, gl, gh, rl, rh;
+            v_mul_expand(v_reinterpret_as_s16(b0), vcb, bl, bh);
+            v_mul_expand(v_reinterpret_as_s16(g0), vcg, gl, gh);
+            v_mul_expand(v_reinterpret_as_s16(r0), vcr, rl, rh);
+            y00 = v_shr<shift>(v_reinterpret_as_u32(v_add(v_add(bl, gl), v_add(rl, vdelta))));
+            y01 = v_shr<shift>(v_reinterpret_as_u32(v_add(v_add(bh, gh), v_add(rh, vdelta))));
+            v_mul_expand(v_reinterpret_as_s16(b1), vcb, bl, bh);
+            v_mul_expand(v_reinterpret_as_s16(g1), vcg, gl, gh);
+            v_mul_expand(v_reinterpret_as_s16(r1), vcr, rl, rh);
+            y10 = v_shr<shift>(v_reinterpret_as_u32(v_add(v_add(bl, gl), v_add(rl, vdelta))));
+            y11 = v_shr<shift>(v_reinterpret_as_u32(v_add(v_add(bh, gh), v_add(rh, vdelta))));
+#else
             v_int16 bg00, bg01, bg10, bg11;
             v_int16 rd00, rd01, rd10, rd11;
             v_zip(v_reinterpret_as_s16(b0), v_reinterpret_as_s16(g0), bg00, bg01);
@@ -779,11 +801,11 @@ struct RGB2Gray<uchar>
             v_zip(v_reinterpret_as_s16(r0), delta, rd00, rd01);
             v_zip(v_reinterpret_as_s16(r1), delta, rd10, rd11);
 
-            v_uint32 y00, y01, y10, y11;
             y00 = v_shr<shift>(v_reinterpret_as_u32(v_add(v_dotprod(bg00, bg2y), v_dotprod(rd00, r12y))));
             y01 = v_shr<shift>(v_reinterpret_as_u32(v_add(v_dotprod(bg01, bg2y), v_dotprod(rd01, r12y))));
             y10 = v_shr<shift>(v_reinterpret_as_u32(v_add(v_dotprod(bg10, bg2y), v_dotprod(rd10, r12y))));
             y11 = v_shr<shift>(v_reinterpret_as_u32(v_add(v_dotprod(bg11, bg2y), v_dotprod(rd11, r12y))));
+#endif
 
             v_uint16 y0, y1;
             y0 = v_pack(y00, y01);
