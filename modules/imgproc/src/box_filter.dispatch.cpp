@@ -315,6 +315,21 @@ Ptr<FilterEngine> createBoxFilter(int srcType, int dstType, Size ksize,
 }
 
 
+static void boxFilterStriped(const Mat& src, Mat& dst, Size ksize, Point anchor,
+                             bool normalize, int borderType, Size wsz, Point ofs, int nstripes)
+{
+    // a stripe reads rows its neighbours may already have written
+    Mat srcFull = (src.data == dst.data) ? src.clone() : src;
+    parallel_for_(Range(0, dst.rows), [&](const Range& r)
+    {
+        Mat sstripe = srcFull.rowRange(r.start, r.end);
+        Mat dstripe = dst.rowRange(r.start, r.end);
+        Ptr<FilterEngine> fs = createBoxFilter( src.type(), dst.type(),
+                            ksize, anchor, normalize, borderType );
+        fs->apply( sstripe, dstripe, wsz, Point(ofs.x, ofs.y + r.start) );
+    }, nstripes);
+}
+
 void boxFilter(InputArray _src, OutputArray _dst, int ddepth,
                Size ksize, Point anchor,
                bool normalize, int borderType)
@@ -361,6 +376,22 @@ void boxFilter(InputArray _src, OutputArray _dst, int ddepth,
         CV_CPU_DISPATCH(blockSum, (src, dst, ksize, anchor, wsz, ofs, normalize, borderType),
             CV_CPU_DISPATCH_MODES_ALL);
         return;
+    }
+
+    // ColumnSum carries a running vertical sum, so the engine is never stateless and
+    // FilterEngine's own tiled parallel path cannot fire. One engine per stripe gives each
+    // thread its own accumulator, restarted from that stripe's first rows.
+    // both terms of nstripes below exceed 1 only above these two bounds, so test them first
+    // and leave the single-stripe path with no added work at all
+    if (dst.total() >= (size_t)(1<<16) && dst.rows >= 4*ksize.height)
+    {
+        const int nstripes = std::min((int)(dst.total()/(double)(1<<16)) + 1,
+                                      std::max(1, dst.rows/(2*ksize.height)));
+        if (nstripes > 1)
+        {
+            boxFilterStriped(src, dst, ksize, anchor, normalize, borderType, wsz, ofs, nstripes);
+            return;
+        }
     }
 
     Ptr<FilterEngine> f = createBoxFilter( src.type(), dst.type(),
