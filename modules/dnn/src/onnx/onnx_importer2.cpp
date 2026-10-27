@@ -270,7 +270,7 @@ protected:
     void parseTranspose            (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseUnsqueeze            (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseUpsample             (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
-    void parseNonMaxSuprression    (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
+    void parseNonMaxSuppression    (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseTopK2                (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseBitShift             (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseBitwise              (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
@@ -295,6 +295,8 @@ protected:
     void parseDequantizeLinear     (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseQuantizeLinear       (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseDynamicQuantizeLinear(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
+    void parseConvInteger          (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
+    void parseMatMulInteger        (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseCustomLayer          (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseQConv                (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseQMatMul              (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
@@ -2204,9 +2206,9 @@ void ONNXImporter2::parseAffineGrid(LayerParams& layerParams, const opencv_onnx:
     addLayer(layerParams, node_proto);
 }
 
-void ONNXImporter2::parseNonMaxSuprression(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)
+void ONNXImporter2::parseNonMaxSuppression(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)
 {
-    layerParams.type = "NonMaxSuprression";
+    layerParams.type = "NonMaxSuppression";
     addLayer(layerParams, node_proto);
 }
 
@@ -2509,6 +2511,26 @@ void ONNXImporter2::parseDynamicQuantizeLinear(LayerParams& layerParams, const o
     addLayer(layerParams, node_proto);
 }
 
+// ONNX ConvInteger (opset 10) is the int32-output mode of Conv2Int8; zero points stay inputs
+void ONNXImporter2::parseConvInteger(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)
+{
+    int n_inputs = node_proto.input_size();
+    CV_Assert(2 <= n_inputs && n_inputs <= 4);
+    layerParams.type = "Conv2Int8";
+    layerParams.set("int32_output", true);
+    addLayer(layerParams, node_proto, n_inputs);
+}
+
+// ONNX MatMulInteger (opset 10) is MatMulInt8 in int32-output mode; B and zero points stay inputs
+void ONNXImporter2::parseMatMulInteger(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)
+{
+    int n_inputs = node_proto.input_size();
+    CV_Assert(2 <= n_inputs && n_inputs <= 4);
+    layerParams.type = "MatMulInt8";
+    layerParams.set("int32_output", true);
+    addLayer(layerParams, node_proto, n_inputs);
+}
+
 void ONNXImporter2::parseRMSNormalization(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)
 {
     layerParams.type = "RMSNormalization";
@@ -2604,12 +2626,17 @@ void ONNXImporter2::parseQConv(LayerParams& layerParams, const opencv_onnx::Node
 
             Mat bias_float;
             bias_int32.convertTo(bias_float, CV_32F);
+            CV_CheckGE(x_scale_mat.total(), (size_t)1, "DNN/ONNX/QLinearConv: x_scale is empty");
             float x_sc = x_scale_mat.at<float>(0);
             if (w_scale_mat.total() == 1)
                 bias_float *= x_sc * w_scale_mat.at<float>(0);
             else
+            {
+                CV_CheckEQ(w_scale_mat.total(), bias_float.total(),
+                           "DNN/ONNX/QLinearConv: per-channel w_scale length must match the bias length");
                 for (int i = 0; i < (int)w_scale_mat.total(); i++)
                     bias_float.at<float>(i) *= x_sc * w_scale_mat.at<float>(i);
+            }
 
             bias_arg = netimpl->newConstArg(bn + "/bias_float", bias_float);
         }
@@ -3456,7 +3483,7 @@ void ONNXImporter2::buildDispatchMap_ONNX_AI()
     dispatch["BitwiseOr"] = &ONNXImporter2::parseBitwise;
     dispatch["BitwiseXor"] = &ONNXImporter2::parseBitwise;
     dispatch["BitwiseNot"] = &ONNXImporter2::parseBitwiseNot;
-    dispatch["NonMaxSuprression"] = &ONNXImporter2::parseNonMaxSuprression;
+    dispatch["NonMaxSuppression"] = &ONNXImporter2::parseNonMaxSuppression;
     dispatch["SoftMax"] = dispatch["Softmax"] = dispatch["LogSoftmax"] = &ONNXImporter2::parseSoftMax;
     dispatch["DetectionOutput"] = &ONNXImporter2::parseDetectionOutput;
     dispatch["PriorBox"] = &ONNXImporter2::parsePriorBox;
@@ -3502,6 +3529,8 @@ void ONNXImporter2::buildDispatchMap_ONNX_AI()
     dispatch["DequantizeLinear"] = &ONNXImporter2::parseDequantizeLinear;
     dispatch["QuantizeLinear"] = &ONNXImporter2::parseQuantizeLinear;
     dispatch["DynamicQuantizeLinear"] = &ONNXImporter2::parseDynamicQuantizeLinear;
+    dispatch["ConvInteger"] = &ONNXImporter2::parseConvInteger;
+    dispatch["MatMulInteger"] = &ONNXImporter2::parseMatMulInteger;
     dispatch["QLinearConv"] = &ONNXImporter2::parseQConv;
     dispatch["QLinearMatMul"] = &ONNXImporter2::parseQMatMul;
 
