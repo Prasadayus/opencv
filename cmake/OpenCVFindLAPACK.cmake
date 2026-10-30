@@ -63,7 +63,8 @@ macro(ocv_lapack_check)
     # adding proxy opencv_lapack.h header
     set(CBLAS_H_PROXY_PATH ${CMAKE_BINARY_DIR}/opencv_lapack.h)
 
-    set(_lapack_add_extern_c NOT (APPLE OR OPENCV_SKIP_LAPACK_EXTERN_C) OR OPENCV_FORCE_LAPACK_EXTERN_C)
+    # ARMPL headers declare their own extern "C" and include <complex> under C++
+    set(_lapack_add_extern_c NOT (APPLE OR LAPACK_IMPL STREQUAL "ARMPL" OR OPENCV_SKIP_LAPACK_EXTERN_C) OR OPENCV_FORCE_LAPACK_EXTERN_C)
 
     set(_lapack_content "// This file is auto-generated\n")
     if(${_lapack_add_extern_c})
@@ -183,6 +184,14 @@ if(WITH_LAPACK)
           INCLUDE_DIR "${MKL_INCLUDE_DIRS}"
           LIBRARIES "${MKL_LIBRARIES}")
       endif()
+    endif()
+    if(NOT LAPACK_LIBRARIES AND HAVE_ARMPL AND NOT OPENCV_LAPACK_DISABLE_ARMPL)
+      # lapack.h carries the Fortran-style names OCV_LAPACK_FUNC builds; lapacke.h only the LAPACKE_ wrappers
+      ocv_lapack_check(IMPL "ARMPL"
+        CBLAS_H "cblas.h"
+        LAPACKE_H "lapack.h"
+        INCLUDE_DIR "${ARMPL_INCLUDE_DIRS}"
+        LIBRARIES "${ARMPL_LIBRARY}")
     endif()
     if(NOT LAPACK_LIBRARIES)
       include(cmake/OpenCVFindOpenBLAS.cmake)

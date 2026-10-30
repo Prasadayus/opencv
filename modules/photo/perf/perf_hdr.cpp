@@ -60,5 +60,37 @@ PERF_TEST(HDR, Robertson)
     SANITY_CHECK_NOTHING();
 }
 
+// CalibrateDebevec had no perf coverage, and it is the one HDR path that does a large solve:
+// calibrate.cpp:152 is a DECOMP_SVD least-squares on an
+// (samples*images + 257) x (256 + samples) CV_32F system - 467 x 326 at the default 70 samples,
+// well past every LAPACK threshold. Synthetic exposures keep this off OPENCV_TEST_DATA_PATH;
+// the system size depends only on sample and image counts, not on image content.
+typedef perf::TestBaseWithParam<int> CalibrateTest;
+
+PERF_TEST_P(CalibrateTest, CalibrateDebevec, ::testing::Values(70, 200))
+{
+    const int samples = GetParam();
+    const Size sz(640, 480);
+
+    std::vector<Mat> images;
+    std::vector<float> times;
+    for (int i = 0; i < 3; i++)
+    {
+        Mat img(sz, CV_8UC3);
+        randu(img, Scalar::all(0), Scalar::all(256));
+        images.push_back(img);
+        times.push_back(1.f / (15 << i));
+    }
+
+    Ptr<CalibrateDebevec> calibrate = createCalibrateDebevec(samples);
+    Mat response;
+
+    declare.time(60);
+
+    TEST_CYCLE() calibrate->process(images, response, times);
+
+    SANITY_CHECK_NOTHING();
+}
+
 } // namespace
 } // namespace opencv_test

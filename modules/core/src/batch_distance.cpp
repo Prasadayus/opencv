@@ -381,6 +381,30 @@ void cv::batchDistance( InputArray _src1, InputArray _src2,
                   ("The combination of type=%d, dtype=%d and normType=%d is not supported",
                    type, dtype, normType));
 
+    // ||a-b||^2 = |a|^2 + |b|^2 - 2 a.b turns the whole matrix into one gemm. Only the float
+    // L2/L2SQR rows of the table above are servable that way. A mask is declined: masked pairs have
+    // to become FLT_MAX, which a gemm cannot express, and the shapes that pay never use one.
+    // crosscheck needs no code here - it recurses into batchDistance twice, above.
+    // K == 0 only, and that restriction is measured rather than assumed. On the dense path OpenCV
+    // has already allocated the full m x n output, so the gemm adds no traffic and it measures
+    // 2.1-2.8x. With K > 0 the output is only m x K, so the gemm needs an m x n scratch that the
+    // selection loop then reads back - 4 MB of round trip at 1000x1000 that the per-row baseline
+    // never pays, because it keeps one row in cache. That measured 0.33-0.78x. Not worth having.
+    if( K <= 0 && type == CV_32F && dtype == CV_32F && mask.empty() &&
+        (normType == NORM_L2SQR || normType == NORM_L2) &&
+        src1.rows > 0 && src2.rows > 0 && src1.cols > 0 )
+    {
+        int res = cv_hal_batchDistL2Sqr32f(src1.ptr<float>(), src1.step, src1.rows,
+                                           src2.ptr<float>(), src2.step, src2.rows,
+                                           src1.cols, dist.ptr<float>(), dist.step,
+                                           normType == NORM_L2);
+        if( res == CV_HAL_ERROR_OK )
+            return;                     // dist is the complete answer
+        if( res != CV_HAL_ERROR_NOT_IMPLEMENTED )
+            CV_Error_(cv::Error::StsInternal,
+                      ("HAL implementation batchDistL2Sqr32f returned %d (0x%08x)", res, res));
+    }
+
     parallel_for_(Range(0, src1.rows),
                   BatchDistInvoker(src1, src2, dist, nidx, K, mask, update, func));
 }

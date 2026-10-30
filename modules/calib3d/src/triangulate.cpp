@@ -107,41 +107,75 @@ void triangulatePoints( InputArray _P1, InputArray _P2,
     _P1.getMat().convertTo(P1, CV_64F);
     _P2.getMat().convertTo(P2, CV_64F);
 
+    // Stage every system up front so the whole set can go to the batched HAL in one call. A 4x4 is
+    // far under cv_hal_SVD64f's threshold, so the per-point path below always lands on OpenCV's
+    // Jacobi - roughly 20-30 square roots per point against four for a Householder QR. Only worth
+    // staging above a size; below it the original path runs untouched and allocates nothing.
+    // Rows here are the equations, so this is A itself; hal::SVD64f takes the transpose, which is
+    // what matrA holds in the fallback.
+    cv::AutoBuffer<double> sysbuf, nulbuf;
+    bool batched = false;
+    if( npoints1 >= 64 )
+    {
+        sysbuf.allocate((size_t)npoints1 * 16);
+        nulbuf.allocate((size_t)npoints1 * 4);
+        for( int i = 0; i < npoints1; i++ )
+        {
+            double x1 = p1f ? (double)p1f[pstep1*i] : p1d[pstep1*i];
+            double y1 = p1f ? (double)p1f[pstep1*i + ystep1] : p1d[pstep1*i + ystep1];
+            double x2 = p2f ? (double)p2f[pstep2*i] : p2d[pstep2*i];
+            double y2 = p2f ? (double)p2f[pstep2*i + ystep2] : p2d[pstep2*i + ystep2];
+
+            double* A = sysbuf.data() + (size_t)i * 16;
+            for(int k = 0; k < 4; k++)
+            {
+                A[     k] = x1*P1(2, k) - P1(0, k);
+                A[ 4 + k] = y1*P1(2, k) - P1(1, k);
+                A[ 8 + k] = x2*P2(2, k) - P2(0, k);
+                A[12 + k] = y2*P2(2, k) - P2(1, k);
+            }
+        }
+        batched = hal::nullspace4x4Batch64f(sysbuf.data(), npoints1, nulbuf.data());
+    }
+
     // Solve system for each point
     for( int i = 0; i < npoints1; i++ )
     {
-        // Fill matrix for current point
-        double x1 = p1f ? (double)p1f[pstep1*i] : p1d[pstep1*i];
-        double y1 = p1f ? (double)p1f[pstep1*i + ystep1] : p1d[pstep1*i + ystep1];
-        double x2 = p2f ? (double)p2f[pstep2*i] : p2d[pstep2*i];
-        double y2 = p2f ? (double)p2f[pstep2*i + ystep2] : p2d[pstep2*i + ystep2];
+        double v[4];
 
-        for(int k = 0; k < 4; k++)
+        if( batched )
         {
-            matrA(k, 0) = x1*P1(2, k) - P1(0, k);
-            matrA(k, 1) = y1*P1(2, k) - P1(1, k);
-            matrA(k, 2) = x2*P2(2, k) - P2(0, k);
-            matrA(k, 3) = y2*P2(2, k) - P2(1, k);
-        }
-
-        // Solve system for current point
-        hal::SVD64f(matrA.val, step4, matrW.val, matrU.val, step4, matrV.val, step4, 4, 4, 4);
-
-        // Copy computed point
-        if(depth1 == CV_32F)
-        {
-            points4D.at<float>(0, i) = (float)matrV(3, 0);
-            points4D.at<float>(1, i) = (float)matrV(3, 1);
-            points4D.at<float>(2, i) = (float)matrV(3, 2);
-            points4D.at<float>(3, i) = (float)matrV(3, 3);
+            const double* nv = nulbuf.data() + (size_t)i * 4;
+            v[0] = nv[0]; v[1] = nv[1]; v[2] = nv[2]; v[3] = nv[3];
         }
         else
         {
-            points4D.at<double>(0, i) = matrV(3, 0);
-            points4D.at<double>(1, i) = matrV(3, 1);
-            points4D.at<double>(2, i) = matrV(3, 2);
-            points4D.at<double>(3, i) = matrV(3, 3);
+            // Fill matrix for current point
+            double x1 = p1f ? (double)p1f[pstep1*i] : p1d[pstep1*i];
+            double y1 = p1f ? (double)p1f[pstep1*i + ystep1] : p1d[pstep1*i + ystep1];
+            double x2 = p2f ? (double)p2f[pstep2*i] : p2d[pstep2*i];
+            double y2 = p2f ? (double)p2f[pstep2*i + ystep2] : p2d[pstep2*i + ystep2];
+
+            for(int k = 0; k < 4; k++)
+            {
+                matrA(k, 0) = x1*P1(2, k) - P1(0, k);
+                matrA(k, 1) = y1*P1(2, k) - P1(1, k);
+                matrA(k, 2) = x2*P2(2, k) - P2(0, k);
+                matrA(k, 3) = y2*P2(2, k) - P2(1, k);
+            }
+
+            // Solve system for current point
+            hal::SVD64f(matrA.val, step4, matrW.val, matrU.val, step4, matrV.val, step4, 4, 4, 4);
+            v[0] = matrV(3, 0); v[1] = matrV(3, 1); v[2] = matrV(3, 2); v[3] = matrV(3, 3);
         }
+
+        // Copy computed point
+        if(depth1 == CV_32F)
+            for(int k = 0; k < 4; k++)
+                points4D.at<float>(k, i) = (float)v[k];
+        else
+            for(int k = 0; k < 4; k++)
+                points4D.at<double>(k, i) = v[k];
     }
 }
 

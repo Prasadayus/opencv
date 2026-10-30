@@ -450,6 +450,298 @@ INSTANTIATE_TEST_CASE_P(/*nothing*/ , KMeans,
     )
 );
 
+// ---------------------------------------------------------------------------
+// LOCAL ONLY - not for upstream.
+// SvdTest and SolveTest stop at n=100. At that size multi-threaded OpenBLAS is
+// never a win and DECOMP_LU is catastrophically slower, because the fork/join
+// cost dwarfs the arithmetic. These sizes are where threading should start to
+// pay, so this locates the crossover. Plain uniform random matrices (full rank
+// with probability 1) rather than buildRandomMat, to keep setup cheap at 1024.
+// ---------------------------------------------------------------------------
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth>> LargeFactorTest;
+
+PERF_TEST_P(LargeFactorTest, svdLarge, ::testing::Combine(
+    ::testing::Values(128, 256, 512, 1024),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    int n     = std::get<0>(GetParam());
+    int mtype = std::get<1>(GetParam());
+
+    Mat A(n, n, mtype);
+    theRNG().fill(A, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::SVD svd(A, 0);
+
+    SANITY_CHECK_NOTHING();
+}
+
+PERF_TEST_P(LargeFactorTest, solveLuLarge, ::testing::Combine(
+    ::testing::Values(128, 256, 512, 1024),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    int n     = std::get<0>(GetParam());
+    int mtype = std::get<1>(GetParam());
+
+    Mat A(n, n, mtype), b(n, 1, mtype), x;
+    theRNG().fill(A, RNG::UNIFORM, Scalar(-1), Scalar(1));
+    theRNG().fill(b, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::solve(A, b, x, DECOMP_LU);
+
+    SANITY_CHECK_NOTHING();
+}
+
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth, SolveDecompEnum>> InvertTest;
+
+PERF_TEST_P(InvertTest, invert, ::testing::Combine(
+    ::testing::Values(31, 64, 100, 256),
+    ::testing::Values(CV_32F, CV_64F),
+    ::testing::Values(DECOMP_LU, DECOMP_CHOLESKY, DECOMP_SVD, DECOMP_EIG)
+    ))
+{
+    auto t = GetParam();
+    int n      = std::get<0>(t);
+    int mtype  = std::get<1>(t);
+    int method = std::get<2>(t);
+
+    // CHOLESKY needs positive definite, EIG needs symmetric; u*s*u.t() gives both
+    bool symmetrical = (method == DECOMP_CHOLESKY || method == DECOMP_EIG);
+
+    RNG& rng = theRNG();
+    Mat A = buildRandomMat(n, n, mtype, rng, n, symmetrical);
+    Mat dst;
+
+    TEST_CYCLE() cv::invert(A, dst, method);
+
+    SANITY_CHECK_NOTHING();
+}
+
+// mulTransposed hands off to cv::gemm only when every dimension is >= 100 and the types match.
+// The tall shapes are how calcCovarMatrix uses it (samples x features); 5000x50 stays below the
+// column threshold and so exercises OpenCV's own loop instead.
+typedef perf::TestBaseWithParam<std::tuple<std::tuple<int, int>, MatDepth>> MulTransposedTest;
+
+PERF_TEST_P(MulTransposedTest, ata, ::testing::Combine(
+    ::testing::Values(std::make_tuple(64, 64), std::make_tuple(128, 128),
+                      std::make_tuple(256, 256), std::make_tuple(512, 512),
+                      std::make_tuple(5000, 50), std::make_tuple(5000, 200),
+                      // the two real J.t()*J shapes: fisheye::stereoCalibrate at 20 images,
+                      // and the stitching bundle adjuster at 30 images
+                      std::make_tuple(4320, 144), std::make_tuple(45000, 120)),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    auto rc = std::get<0>(t);
+    int mtype = std::get<1>(t);
+    int rows = std::get<0>(rc), cols = std::get<1>(rc);
+
+    Mat A(rows, cols, mtype), dst;
+    theRNG().fill(A, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::mulTransposed(A, dst, true);
+
+    SANITY_CHECK_NOTHING();
+}
+
+// cv::transform's hand-written SIMD is compiled out on ARM64, so the baseline here is the
+// generic scalar template. scn==dcn==3 is the common colour-conversion shape.
+typedef perf::TestBaseWithParam<std::tuple<Size, MatDepth, bool>> TransformTest;
+
+PERF_TEST_P(TransformTest, transform, ::testing::Combine(
+    ::testing::Values(Size(640, 480), Size(1920, 1080)),
+    ::testing::Values(CV_32F, CV_64F),
+    ::testing::Bool() // affine offset
+    ))
+{
+    auto t = GetParam();
+    Size sz    = std::get<0>(t);
+    int mtype  = std::get<1>(t);
+    bool affine = std::get<2>(t);
+
+    Mat src(sz, CV_MAKETYPE(mtype, 3)), dst;
+    theRNG().fill(src, RNG::UNIFORM, Scalar::all(-1), Scalar::all(1));
+
+    Mat m(3, affine ? 4 : 3, mtype);
+    theRNG().fill(m, RNG::UNIFORM, Scalar::all(-1), Scalar::all(1));
+
+    TEST_CYCLE() cv::transform(src, dst, m);
+
+    SANITY_CHECK_NOTHING();
+}
+
+typedef perf::TestBaseWithParam<std::tuple<Size, MatDepth>> ScaleAddTest;
+
+PERF_TEST_P(ScaleAddTest, scaleAdd, ::testing::Combine(
+    ::testing::Values(Size(640, 480), Size(1920, 1080)),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    Size sz   = std::get<0>(t);
+    int mtype = std::get<1>(t);
+
+    Mat a(sz, mtype), b(sz, mtype), dst;
+    theRNG().fill(a, RNG::UNIFORM, Scalar(-1), Scalar(1));
+    theRNG().fill(b, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::scaleAdd(a, 2.5, b, dst);
+
+    SANITY_CHECK_NOTHING();
+}
+
+// icovar is len x len, so the quadratic form is O(len^2) and dominates.
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth>> MahalanobisTest;
+
+PERF_TEST_P(MahalanobisTest, mahalanobis, ::testing::Combine(
+    ::testing::Values(32, 64, 128, 256, 512),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    int len   = std::get<0>(t);
+    int mtype = std::get<1>(t);
+
+    Mat v1(1, len, mtype), v2(1, len, mtype), icovar(len, len, mtype);
+    RNG& rng = theRNG();
+    rng.fill(v1, RNG::UNIFORM, Scalar(-1), Scalar(1));
+    rng.fill(v2, RNG::UNIFORM, Scalar(-1), Scalar(1));
+    rng.fill(icovar, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::Mahalanobis(v1, v2, icovar);
+
+    SANITY_CHECK_NOTHING();
+}
+
+// calcCovarMatrix passes the mean as delta and an explicit ctype. ctype is passed as the data
+// type here so stype == dtype; with the default CV_64F against CV_32F data the HAL declines.
+typedef perf::TestBaseWithParam<std::tuple<std::tuple<int, int>, MatDepth>> CovarTest;
+
+PERF_TEST_P(CovarTest, calcCovarMatrix, ::testing::Combine(
+    ::testing::Values(std::make_tuple(1000, 100), std::make_tuple(5000, 50),
+                      std::make_tuple(5000, 200)),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    auto rc = std::get<0>(t);
+    int mtype = std::get<1>(t);
+    int rows = std::get<0>(rc), cols = std::get<1>(rc);
+
+    Mat data(rows, cols, mtype), covar, mean;
+    theRNG().fill(data, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::calcCovarMatrix(data, covar, mean, COVAR_NORMAL | COVAR_ROWS, mtype);
+
+    SANITY_CHECK_NOTHING();
+}
+
+// cv::eigenNonSymmetric and cv::LDA share the same hand-rolled JAMA path in lda.cpp; a
+// non-symmetric matrix never takes the cv::eigen fallback there.
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth>> EigenNonSymTest;
+
+PERF_TEST_P(EigenNonSymTest, eigenNonSymmetric, ::testing::Combine(
+    ::testing::Values(16, 32, 64, 128, 256),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    int n     = std::get<0>(t);
+    int mtype = std::get<1>(t);
+
+    // inv(Sw)*Sb as cv::LDA builds it: a product of two symmetric matrices, which is not
+    // itself symmetric but does have real eigenvalues
+    RNG& rng = theRNG();
+    Mat Sw = buildRandomMat(n, n, mtype, rng, n, true);
+    Mat Sb = buildRandomMat(n, n, mtype, rng, n, true);
+    Mat A = Sw.inv() * Sb;
+
+    Mat vals, vecs;
+    TEST_CYCLE() cv::eigenNonSymmetric(A, vals, vecs);
+
+    SANITY_CHECK_NOTHING();
+}
+
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth, bool>> EigenTest;
+
+PERF_TEST_P(EigenTest, eigen, ::testing::Combine(
+    ::testing::Values(3, 4, 8, 16, 31, 64, 100, 256),
+    ::testing::Values(CV_32F, CV_64F),
+    ::testing::Bool() // needVectors
+    ))
+{
+    auto t = GetParam();
+    int n            = std::get<0>(t);
+    int mtype        = std::get<1>(t);
+    bool needVectors = std::get<2>(t);
+
+    RNG& rng = theRNG();
+    Mat A = buildRandomMat(n, n, mtype, rng, n, true);
+    Mat vals, vecs;
+
+    if (needVectors)
+    {
+        TEST_CYCLE() cv::eigen(A, vals, vecs);
+    }
+    else
+    {
+        TEST_CYCLE() cv::eigen(A, vals);
+    }
+
+    SANITY_CHECK_NOTHING();
+}
+
+// cv::PCA had no perf coverage. It matters here because pca.cpp sets ctype = max(CV_32F,
+// data.depth()), so 8-bit input gives stype != dtype - and BOTH the HAL hook and the gemm fallback
+// in mulTransposed test stype == dtype. Image PCA therefore reached neither, at any size. CV_8U is
+// the case that was blocked; CV_32F is the control that already worked. 400x10304 is the AT&T
+// EigenFaces shape, whose covariance is 400x400 over 10304 - about 1.65 Gflop.
+typedef perf::TestBaseWithParam<std::tuple<std::tuple<int, int>, MatDepth>> PCATest;
+
+PERF_TEST_P(PCATest, compute, ::testing::Combine(
+    ::testing::Values(std::make_tuple(200, 4096), std::make_tuple(400, 10304)),
+    ::testing::Values(CV_8U, CV_32F)
+    ))
+{
+    auto t = GetParam();
+    auto rc = std::get<0>(t);
+    int mtype = std::get<1>(t);
+    int rows = std::get<0>(rc), cols = std::get<1>(rc);
+
+    Mat data(rows, cols, mtype);
+    theRNG().fill(data, RNG::UNIFORM, Scalar(0), Scalar(256));
+
+    PCA pca;
+
+    declare.time(120);
+
+    TEST_CYCLE() pca = PCA(data, noArray(), PCA::DATA_AS_ROW, 16);
+
+    EXPECT_FALSE(pca.eigenvalues.empty());
+    SANITY_CHECK_NOTHING();
+}
+
+typedef perf::TestBaseWithParam<std::tuple<int, MatDepth>> DeterminantTest;
+
+PERF_TEST_P(DeterminantTest, determinant, ::testing::Combine(
+    ::testing::Values(31, 64, 100, 256),
+    ::testing::Values(CV_32F, CV_64F)
+    ))
+{
+    auto t = GetParam();
+    int n     = std::get<0>(t);
+    int mtype = std::get<1>(t);
+
+    Mat A(n, n, mtype);
+    theRNG().fill(A, RNG::UNIFORM, Scalar(-1), Scalar(1));
+
+    TEST_CYCLE() cv::determinant(A);
+
+    SANITY_CHECK_NOTHING();
+}
+
 }
 
 } // namespace
