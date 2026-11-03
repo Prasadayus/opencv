@@ -454,7 +454,24 @@ namespace {
     static inline void pplParallelFor(int first, int last, const Body& body)
     {
 #if defined(_M_ARM64) || defined(_M_ARM64EC)
-        Concurrency::parallel_for(first, last, body, Concurrency::static_partitioner());
+        // static_partitioner has no range-stealing; rebalance with our own atomic work queue.
+        const int total = last - first;
+        const int workers = std::max(1,
+            (int)Concurrency::CurrentScheduler::Get()->GetNumberOfVirtualProcessors());
+        const int chunk = std::max(1, total / (workers * 4));
+        std::atomic<int> next(first);
+        Concurrency::parallel_for(0, workers, [&](int)
+        {
+            for (;;)
+            {
+                int start = next.fetch_add(chunk);
+                if (start >= last)
+                    break;
+                int end = std::min(start + chunk, last);
+                for (int i = start; i < end; i++)
+                    body(i);
+            }
+        }, Concurrency::static_partitioner());
 #else
         Concurrency::parallel_for(first, last, body);
 #endif
