@@ -3183,6 +3183,30 @@ TEST(Core_CvAbs, lowest_signed_values)
     EXPECT_EQ(1ull,                     cv_abs((int64)-1));
 }
 
+// cv_absdiff() on int64 must return the exact distance, even when it does not fit in int64.
+TEST(Core_CvAbsDiff, int64_full_range)
+{
+    EXPECT_EQ((uint64)ULLONG_MAX, cv_absdiff((int64)LLONG_MAX, (int64)LLONG_MIN));
+    EXPECT_EQ((uint64)ULLONG_MAX, cv_absdiff((int64)LLONG_MIN, (int64)LLONG_MAX));
+    EXPECT_EQ(3ull,               cv_absdiff((int64)-1, (int64)2));
+}
+
+// norm(a, b) on CV_64S must not overflow when |a - b| is larger than INT64_MAX.
+TEST(Core_Norm, diff_64S_beyond_int64_range)
+{
+    for (int len : {1, 7, 64})
+    {
+        Mat a(1, len, CV_64S, Scalar(5e18));
+        Mat b(1, len, CV_64S, Scalar(-5e18));
+        Mat mask(1, len, CV_8U, Scalar(255));
+
+        EXPECT_EQ(1e19,       cv::norm(a, b, NORM_INF))       << "length " << len;
+        EXPECT_EQ(1e19,       cv::norm(a, b, NORM_INF, mask)) << "length " << len << ", masked";
+        EXPECT_EQ(len * 1e19, cv::norm(a, b, NORM_L1))        << "length " << len;
+        EXPECT_EQ(len * 1e19, cv::norm(a, b, NORM_L1, mask))  << "length " << len << ", masked";
+    }
+}
+
 // An L1 norm is a sum of magnitudes: never negative, and never dependent on the array length.
 // Checked over both signed integer depths, masked and unmasked, at lengths straddling the vector
 // width so the body, the tail and the two together are covered.
@@ -3260,6 +3284,52 @@ TEST(Core_Norm, NORM_L2SQR_16SC4_large)
     const double expected = static_cast<double>(src.total()) * src.channels() * 16384.0 * 16384.0;
     EXPECT_EQ(expected, cv::norm(src, NORM_L2SQR));
 }
+
+// sum and mean on the fp8 depths, compared with the same values in CV_32F
+class Core_Sum_FP8 : public testing::TestWithParam< tuple<int, int, int> >
+{
+public:
+    int len;
+    Mat a32f, a;
+
+    void SetUp()
+    {
+        const int depth = get<0>(GetParam());
+        const int cn = get<1>(GetParam());
+        len = get<2>(GetParam());
+        const float vals[] = { 1.f, -2.f, 3.5f, 0.5f, 7.f, -0.25f };   // exact in both fp8 formats
+
+        a32f.create(1, len, CV_MAKETYPE(CV_32F, cn));
+        for (int i = 0; i < len * cn; i++)
+            a32f.ptr<float>()[i] = vals[i % 6];
+        a32f.convertTo(a, depth);
+    }
+};
+
+TEST_P(Core_Sum_FP8, sum)
+{
+    EXPECT_EQ(cv::sum(a32f), cv::sum(a));
+}
+
+TEST_P(Core_Sum_FP8, mean)
+{
+    EXPECT_EQ(cv::mean(a32f), cv::mean(a));
+}
+
+TEST_P(Core_Sum_FP8, mean_mask)
+{
+    // every third element is left out, so the mean divides by the selected count
+    Mat mask(1, len, CV_8U);
+    for (int i = 0; i < len; i++)
+        mask.at<uchar>(i) = i % 3 != 0;
+    EXPECT_EQ(cv::mean(a32f, mask), cv::mean(a, mask));
+}
+
+// (1 << 15) + 1 needs a second block, so the float total gets moved to the result and reset
+INSTANTIATE_TEST_CASE_P(/**/, Core_Sum_FP8, testing::Combine(
+    testing::Values(CV_8F_E4M3FN, CV_8F_E4M3FNUZ),
+    testing::Range(1, 5),
+    testing::Values(37, (1 << 15) + 1)));
 
 // cv::sum() returns doubles, so a CV_32U or CV_32S array whose total exceeds the 32-bit range must
 // still come back exact. The scalar step of the accumulation adds four elements to each other in
@@ -3668,6 +3738,27 @@ TEST(Core_ConvertTo, regression_12121)
     }
 }
 
+// convertTo(CV_Bool) must treat -0.0 as zero for every floating-point depth
+typedef testing::TestWithParam<perf::MatDepth> Core_ConvertTo_NegativeZeroToBool;
+
+TEST_P(Core_ConvertTo_NegativeZeroToBool, accuracy)
+{
+    const int depth = GetParam();
+    const float vals[] = { -0.f, 0.f, 1.f, -1.f, 0.5f, -0.5f };
+    const uchar expected[] = { 0, 0, 1, 1, 1, 1 };
+    Mat src32f(1, 6, CV_32F, (void*)vals);
+
+    Mat src, dst;
+    src32f.convertTo(src, depth);
+    src.convertTo(dst, CV_Bool);
+    ASSERT_EQ(CV_Bool, dst.type());
+    for (int i = 0; i < 6; i++)
+        EXPECT_EQ(expected[i], dst.at<uchar>(i)) << "i=" << i;
+}
+
+INSTANTIATE_TEST_CASE_P(/**/, Core_ConvertTo_NegativeZeroToBool,
+    testing::Values(perf::MatDepth(CV_32F), CV_64F, CV_16F, CV_16BF, CV_8F_E4M3FN, CV_8F_E4M3FNUZ));
+
 TEST(Core_MeanStdDev, regression_multichannel)
 {
     {
@@ -4022,6 +4113,35 @@ INSTANTIATE_TEST_CASE_P(Core_CartPolar, Core_CartToPolar_inplace,
     )
 );
 
+typedef testing::TestWithParam<int> Core_CartToPolar_inplace_mag;
+
+// only the magnitude overwrites an input, so the last elements must not be processed twice.
+// CV_64F is not tested: it works on separate float buffers, so it can't hit this.
+TEST_P(Core_CartToPolar_inplace_mag, accuracy)
+{
+    const int len = GetParam();
+    cv::Mat x(1, len, CV_32F), y(1, len, CV_32F);
+    cv::randu(x, cv::Scalar::all(-1000), cv::Scalar::all(1000));
+    cv::randu(y, cv::Scalar::all(-1000), cv::Scalar::all(1000));
+
+    cv::Mat expectedMag, expectedAngle;
+    cv::cartToPolar(x, y, expectedMag, expectedAngle);
+
+    // magnitude into x
+    cv::Mat x1 = x.clone(), angle1;
+    cv::cartToPolar(x1, y, x1, angle1);
+    EXPECT_MAT_NEAR(expectedMag, x1, 1e-2);
+    EXPECT_MAT_NEAR(expectedAngle, angle1, 1e-2);
+
+    // magnitude into y
+    cv::Mat y1 = y.clone(), angle2;
+    cv::cartToPolar(x, y1, y1, angle2);
+    EXPECT_MAT_NEAR(expectedMag, y1, 1e-2);
+    EXPECT_MAT_NEAR(expectedAngle, angle2, 1e-2);
+}
+
+INSTANTIATE_TEST_CASE_P(Core_CartPolar, Core_CartToPolar_inplace_mag, testing::Range(1, 40));
+
 PARAM_TEST_CASE(Core_PolarToCart_inplace, int, bool, bool)
 {
     int  depth;
@@ -4163,6 +4283,79 @@ TEST_P(FiniteMaskFixture, flags)
 // Params are: depth, channels 1 to 4
 INSTANTIATE_TEST_CASE_P(Core_FiniteMask, FiniteMaskFixture, ::testing::Combine(::testing::Values(CV_32F, CV_64F), ::testing::Range(1, 5)));
 
+
+// finiteMask on every float depth, including CV_16F and CV_16BF: a pixel is finite if no channel is NaN or infinity
+typedef testing::TestWithParam<std::tuple<int, int> > Core_FiniteMask_depths;
+
+TEST_P(Core_FiniteMask_depths, accuracy)
+{
+    const int depth = get<0>(GetParam()), cn = get<1>(GetParam());
+    Mat src64(3, 37, CV_64FC(cn));
+    double* p = src64.ptr<double>();
+    for (int i = 0; i < (int)src64.total() * cn; i++)
+        p[i] = i % 11 == 0 ? NAN : i % 13 == 0 ? (i % 2 ? INFINITY : -INFINITY) : i - 50.0;
+
+    Mat src, mask;
+    src64.convertTo(src, depth);
+    cv::finiteMask(src, mask);
+    ASSERT_EQ(CV_8UC1, mask.type());
+
+    for (int i = 0; i < (int)src64.total(); i++)
+    {
+        bool finite = true;
+        for (int c = 0; c < cn; c++)
+            finite = finite && std::isfinite(p[i * cn + c]);
+        EXPECT_EQ(finite ? 255 : 0, mask.at<uchar>(i)) << i;
+    }
+}
+
+INSTANTIATE_TEST_CASE_P(/**/, Core_FiniteMask_depths,
+    testing::Combine(testing::Values(CV_16F, CV_16BF, CV_32F, CV_64F), testing::Range(1, 5)));
+
+// finiteMask on exact bit patterns at the edges of the exponent, on the SIMD loop and the scalar tail
+typedef testing::TestWithParam<std::tuple<int, int> > Core_FiniteMask_bits;
+
+TEST_P(Core_FiniteMask_bits, boundary_values)
+{
+    const int depth = std::get<0>(GetParam());
+    const int cn = std::get<1>(GetParam());
+
+    const struct { ushort f16, bf16; bool finite; } values[] =
+    {
+        { 0x0000, 0x0000, true  },  // +0
+        { 0x8000, 0x8000, true  },  // -0
+        { 0x0001, 0x0001, true  },  // smallest subnormal
+        { 0x8001, 0x8001, true  },  // smallest negative subnormal
+        { 0x03ff, 0x007f, true  },  // largest subnormal
+        { 0x7bff, 0x7f7f, true  },  // largest finite
+        { 0xfbff, 0xff7f, true  },  // largest negative finite
+        { 0x7c00, 0x7f80, false },  // +inf
+        { 0xfc00, 0xff80, false },  // -inf
+        { 0x7c01, 0x7f81, false },  // signalling NaN
+        { 0x7e00, 0x7fc0, false },  // quiet NaN
+        { 0xfe00, 0xffc0, false },  // negative NaN
+        { 0x7fff, 0x7fff, false },  // largest NaN
+    };
+    const int nvalues = (int)(sizeof(values) / sizeof(values[0]));
+
+    // 111 pixels: wide enough for the SIMD loop, odd for the scalar tail
+    Mat src(3, 37, CV_MAKETYPE(depth, cn), Scalar::all(0));
+    ushort* p = src.ptr<ushort>();
+    for (int i = 0; i < (int)src.total(); i++)
+    {
+        const ushort bits = depth == CV_16F ? values[i % nvalues].f16 : values[i % nvalues].bf16;
+        p[i * cn + i % cn] = bits;  // one channel holds the value, the others stay 0
+    }
+
+    Mat mask;
+    finiteMask(src, mask);
+
+    for (int i = 0; i < (int)src.total(); i++)
+        EXPECT_EQ(values[i % nvalues].finite ? 255 : 0, mask.at<uchar>(i)) << "pixel " << i;
+}
+
+INSTANTIATE_TEST_CASE_P(/**/, Core_FiniteMask_bits,
+    testing::Combine(testing::Values(CV_16F, CV_16BF), testing::Range(1, 5)));
 
 ///////////////////////////////////////////////////////////////////////////////////
 typedef testing::TestWithParam<perf::MatDepth> NonZeroSupportedMatDepth;
@@ -4624,14 +4817,6 @@ TEST_P(Core_LUT, accuracy)
     cv::Mat gt = reference(input, table);
     ASSERT_FALSE(gt.empty());
 
-    // Force convert to 8U as CV_Bool is not supported in cv::norm for now
-    // TODO: Remove conversion after cv::norm fix
-    if (value_type == CV_Bool)
-    {
-        output.convertTo(output, CV_8U);
-        gt.convertTo(gt, CV_8U);
-    }
-
     ASSERT_EQ(0, cv::norm(output, gt, cv::NORM_INF));
 }
 
@@ -4656,14 +4841,6 @@ TEST_P(Core_LUT, accuracy_multi)
     cv::Mat gt = reference<3>(input, table);
     ASSERT_FALSE(gt.empty());
 
-    // Force convert to 8U as CV_Bool is not supported in cv::norm for now
-    // TODO: Remove conversion after cv::norm fix
-    if (value_type == CV_Bool)
-    {
-        output.convertTo(output, CV_8U);
-        gt.convertTo(gt, CV_8U);
-    }
-
     ASSERT_EQ(0, cv::norm(output, gt, cv::NORM_INF));
 }
 
@@ -4687,14 +4864,6 @@ TEST_P(Core_LUT, accuracy_multi2)
 
     cv::Mat gt = reference<3, true>(input, table);
     ASSERT_FALSE(gt.empty());
-
-    // Force convert to 8U as CV_Bool is not supported in cv::norm for now
-    // TODO: Remove conversion after cv::norm fix
-    if (value_type == CV_Bool)
-    {
-        output.convertTo(output, CV_8U);
-        gt.convertTo(gt, CV_8U);
-    }
 
     ASSERT_EQ(0, cv::norm(output, gt, cv::NORM_INF));
 }
@@ -4990,7 +5159,7 @@ TEST(Core_Arithm, inRange_unsupported_depth_30153)
 
 TEST(Core_Arithm, sum_unsupported_depth)
 {
-    for (int depth : {CV_Bool, CV_8F_E4M3FN, CV_8F_E4M3FNUZ})
+    for (int depth : {CV_Bool})
     {
         for (int cn : {1, 3})
         {

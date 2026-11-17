@@ -166,6 +166,110 @@ TEST_P(Layer_SDPA_Kernels, Accuracy)
 INSTANTIATE_TEST_CASE_P(/**/, Layer_SDPA_Kernels, testing::Combine(
     testing::Values(1, 5), testing::Values(1, 7, 259), testing::Values(1, 17, 65)));
 
+// QuantizeLinear requires exactly one output, which the shared runLayer() does not request.
+static Mat runQuantizeLinear(LayerParams& lp, std::vector<Mat>& inputs)
+{
+    Ptr<Layer> layer = LayerFactory::createLayerInstance("QuantizeLinear", lp);
+    std::vector<MatShape> inShapes, outShapes, internals;
+    std::vector<cv::dnn::MatType> inTypes, outTypes, internalTypes;
+    for (const Mat& m : inputs) { inShapes.push_back(shape(m)); inTypes.push_back(cv::dnn::MatType(m.type())); }
+    layer->getMemoryShapes(inShapes, 1, outShapes, internals);
+    layer->getTypes(inTypes, 1, 0, outTypes, internalTypes);
+    std::vector<Mat> outputs{Mat(outShapes[0], outTypes[0])}, intp;
+    layer->finalize(inputs, outputs);
+    layer->forward(inputs, outputs, intp);
+    return outputs[0];
+}
+
+// Per-tensor INT4/UINT4 output has to saturate to the 4-bit range on every path,
+// including the x86 AVX2 per-tensor one, so the input is long enough for its
+// 8-lane loop and its scalar tail.
+TEST(Layer_Test_QuantizeLinear, int4_per_tensor_saturates)
+{
+    const int n = 35;
+    const float vals[6] = {-100.f, -7.f, 0.f, 6.f, 40.f, 1000.f};
+    Mat x(1, n, CV_32F);
+    for (int i = 0; i < n; i++)
+        x.at<float>(0, i) = vals[i % 6];
+    const int one = 1;
+    Mat scale(1, &one, CV_32F, Scalar(1.f));  // rank-1 per-tensor scale, as ONNX exports it
+
+    {
+        LayerParams lp;
+        lp.set("axis", 1);
+        lp.set("output_onnx_dtype", 22);  // ONNX INT4, stored as CV_8S
+        Mat zp(1, &one, CV_8S, Scalar(1));
+        std::vector<Mat> inputs{x, scale, zp};
+        Mat out = runQuantizeLinear(lp, inputs);
+        ASSERT_EQ(CV_8S, out.type());
+        const int expected[6] = {-8, -6, 1, 7, 7, 7};
+        for (int i = 0; i < n; i++)
+            EXPECT_EQ(expected[i % 6], (int)out.at<schar>(0, i)) << "i=" << i;
+    }
+    {
+        LayerParams lp;
+        lp.set("axis", 1);
+        lp.set("output_onnx_dtype", 21);  // ONNX UINT4, stored as CV_8U
+        Mat zp(1, &one, CV_8U, Scalar(2));
+        std::vector<Mat> inputs{x, scale, zp};
+        Mat out = runQuantizeLinear(lp, inputs);
+        ASSERT_EQ(CV_8U, out.type());
+        const int expected[6] = {0, 0, 2, 8, 15, 15};
+        for (int i = 0; i < n; i++)
+            EXPECT_EQ(expected[i % 6], (int)out.at<uchar>(0, i)) << "i=" << i;
+    }
+}
+
+typedef testing::TestWithParam<tuple<Backend, Target> > Layer_Test_LogSoftmax;
+TEST_P(Layer_Test_LogSoftmax, DoesNotUnderflow)
+{
+    const int backendId = get<0>(GetParam());
+    const int targetId = get<1>(GetParam());
+
+    // log(softmax(x)) is -inf once x is about 104 below the maximum, where exp underflows.
+    // The 17-element row also goes through the SIMD loops.
+    std::vector<float> data = {1000.f, 1001.f, 1002.f, -1000.f, 0.f, 1000.f};
+    for (int i = 0; i < 17; i++)
+        data.push_back(100.f * i - 800.f);
+
+    for (int len : {3, 17})
+    {
+        SCOPED_TRACE(len);
+        const int rows = len == 3 ? 2 : 1;
+        Mat input(rows, len, CV_32F, data.data() + (len == 3 ? 0 : 6));
+
+        LayerParams lp;
+        lp.type = "Softmax";
+        lp.name = "logSoftmax";
+        lp.set("axis", 1);
+        lp.set("log_softmax", true);
+        Net net;
+        net.addLayerToPrev(lp.name, lp.type, lp);
+        net.setPreferableBackend(backendId);
+        net.setPreferableTarget(targetId);
+        net.setInput(input);
+        Mat out = net.forward();
+
+        Mat ref(rows, len, CV_32F);
+        for (int r = 0; r < rows; r++)
+        {
+            const float* x = input.ptr<float>(r);
+            double maxVal = *std::max_element(x, x + len), sum = 0;
+            for (int c = 0; c < len; c++)
+                sum += std::exp(x[c] - maxVal);
+            for (int c = 0; c < len; c++)
+                ref.at<float>(r, c) = static_cast<float>(x[c] - maxVal - std::log(sum));
+        }
+        double l1 = 1e-4, lInf = 1e-4;
+        if (targetId == DNN_TARGET_OPENCL_FP16 || targetId == DNN_TARGET_CPU_FP16)
+            DNNTestLayer::getDefaultThresholds(backendId, targetId, &l1, &lInf);
+        normAssert(ref, out.reshape(1, rows), "", l1, lInf);
+    }
+}
+
+INSTANTIATE_TEST_CASE_P(/**/, Layer_Test_LogSoftmax,
+    dnnBackendsAndTargets(false, false, true, false, false, false, false, false));
+
 TEST(Layer_Test_Reshape, Accuracy)
 {
     {
@@ -4685,6 +4789,91 @@ TEST(Test_Compress, AllFalse_WithoutAxis)
     runLayer(layer, inputs, outputs);
     ASSERT_EQ(outputs.size(), (size_t)1);
     ASSERT_EQ(shape(outputs[0]), MatShape({0}));
+}
+
+TEST(Layer_Test_CausalConvWithState, RejectMismatchedWeightBiasAndState)
+{
+    const int B = 2, C = 64, T = 8, K = 4;
+    Mat x(std::vector<int>{B, C, T}, CV_32F);
+    randu(x, -1, 1);
+    Mat w(std::vector<int>{C, 1, K}, CV_32F);
+    randu(w, -1, 1);
+    Mat bias(std::vector<int>{C}, CV_32F);
+    randu(bias, -1, 1);
+    Mat past(std::vector<int>{B, C, K - 1}, CV_32F);
+    randu(past, -1, 1);
+
+    LayerParams lp;
+    lp.type = "CausalConvWithState";
+    lp.name = "causal_conv_with_state";
+    Ptr<Layer> layer = LayerFactory::createLayerInstance(lp.type, lp);
+    ASSERT_TRUE(layer);
+
+    // weight must be [C, 1, K]
+    std::vector<Mat> inputs{x, Mat(std::vector<int>{1, 1, K}, CV_32F, Scalar(1))};
+    std::vector<Mat> outputs;
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+    inputs = {x, Mat(std::vector<int>{C, 2, K}, CV_32F, Scalar(1))};
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+
+    // bias must be [C]
+    inputs = {x, w, Mat(std::vector<int>{1}, CV_32F, Scalar(1))};
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+    inputs = {x, w, Mat(std::vector<int>{1, C}, CV_32F, Scalar(1))};
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+
+    // past_state must be [B, C, K - 1]
+    inputs = {x, w, bias, Mat(std::vector<int>{B, 1, K - 1}, CV_32F, Scalar(1))};
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+    inputs = {x, w, bias, Mat(std::vector<int>{1, C, K - 1}, CV_32F, Scalar(1))};
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+    inputs = {x, w, bias, Mat(std::vector<int>{B, C, K}, CV_32F, Scalar(1))};
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+
+    // weight, bias and past_state must have the input type, on both the fp32 and the fp16 path
+    Mat x16, w16, bias16, past16;
+    x.convertTo(x16, CV_16F);
+    w.convertTo(w16, CV_16F);
+    bias.convertTo(bias16, CV_16F);
+    past.convertTo(past16, CV_16F);
+    inputs = {x, w16};
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+    inputs = {x16, w};
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+    inputs = {x16, w16, bias};
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+    inputs = {x16, w16, bias16, past};
+    EXPECT_THROW(runLayer(layer, inputs, outputs), cv::Exception);
+    inputs = {x16, w16, bias16, past16};
+    EXPECT_NO_THROW(runLayer(layer, inputs, outputs));
+
+    // valid inputs give the depthwise causal convolution, with past_state read per batch
+    Mat ref(std::vector<int>{B, C, T}, CV_32F), refState(std::vector<int>{B, C, K - 1}, CV_32F);
+    for (int b = 0; b < B; b++)
+    {
+        for (int c = 0; c < C; c++)
+        {
+            std::vector<float> pad(K - 1 + T);
+            for (int j = 0; j < K - 1; j++)
+                pad[j] = past.ptr<float>(b, c)[j];
+            for (int t = 0; t < T; t++)
+                pad[K - 1 + t] = x.ptr<float>(b, c)[t];
+            for (int t = 0; t < T; t++)
+            {
+                float acc = bias.at<float>(c);
+                for (int k = 0; k < K; k++)
+                    acc += w.ptr<float>(c)[k] * pad[t + k];
+                ref.ptr<float>(b, c)[t] = acc;
+            }
+            for (int j = 0; j < K - 1; j++)
+                refState.ptr<float>(b, c)[j] = pad[T + j];
+        }
+    }
+    inputs = {x, w, bias, past};
+    ASSERT_NO_THROW(runLayer(layer, inputs, outputs));
+    ASSERT_EQ(outputs.size(), (size_t)2);
+    normAssert(ref, outputs[0], "output");
+    normAssert(refState, outputs[1], "present_state");
 }
 
 }} // namespace
