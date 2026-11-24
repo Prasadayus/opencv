@@ -294,10 +294,13 @@ TEST(Layer_Test_Reshape, Accuracy)
 }
 
 // Legacy models spell a flatten-to-(1, total) as a 2D shape whose second element is wrong.
-static MatShape reshape2OutShape(const MatShape& inpShape, const std::vector<int>& spec)
+static MatShape reshape2OutShape(const MatShape& inpShape, const std::vector<int>& spec,
+                                 bool allowZero = false)
 {
     LayerParams params;
     params.set("shape", DictValue::arrayInt<const int*>(spec.data(), spec.size()));
+    if (allowZero)
+        params.set("allowzero", 1);
     Ptr<Layer> layer = LayerFactory::createLayerInstance("Reshape2", params);
 
     std::vector<MatShape> outputs, internals;
@@ -315,6 +318,37 @@ TEST(Layer_Test_Reshape2, legacy_shape_spec)
     EXPECT_EQ(MatShape({1, 7}), reshape2OutShape(MatShape({7}), {1, 7}));
     EXPECT_EQ(MatShape({1, 24}), reshape2OutShape(MatShape({1, 2, 3, 4}), {0, -1}));
     EXPECT_EQ(MatShape({2, 12}), reshape2OutShape(MatShape({2, 3, 4}), {0, -1}));
+}
+
+// ONNX allowzero: a 0 in the shape is a zero-size axis instead of "copy this axis from the input"
+TEST(Layer_Test_Reshape2, allowzero)
+{
+    // 2D legacy path: without allowzero, (0, 5) on a (1, 0) input would be taken for the
+    // legacy (1, total) spelling; with allowzero the 0 must stay a real zero-size axis
+    EXPECT_EQ(MatShape({0, 5}), reshape2OutShape(MatShape({1, 0}), {0, 5}, true));
+    EXPECT_EQ(MatShape({3, 0}), reshape2OutShape(MatShape({0, 3}), {3, 0}, true));
+    // without allowzero, 0 still copies the input axis
+    EXPECT_EQ(MatShape({2, 3}), reshape2OutShape(MatShape({2, 3}), {0, 3}));
+    // N-D path (test_reshape_allowzero_reordered)
+    EXPECT_EQ(MatShape({3, 4, 0}), reshape2OutShape(MatShape({0, 3, 4}), {3, 4, 0}, true));
+}
+
+TEST(Layer_Test_Reshape2, allowzero_block_layout)
+{
+    // a 0 in the channel position keeps the block layout only when it means "copy C";
+    // with allowzero it is a zero-size channel axis, so the layer must fall back to NCHW
+    const int spec[] = {1, 0, 4, 4};
+    LayerParams params;
+    params.set("shape", DictValue::arrayInt<const int*>(spec, 4));
+    params.set("allowzero", 1);
+    Ptr<Layer> layer = LayerFactory::createLayerInstance("Reshape2", params);
+
+    std::vector<DataLayout> desiredInputs, outputs;
+    layer->getLayouts(std::vector<DataLayout>(1, DATA_LAYOUT_BLOCK), desiredInputs, 1, outputs);
+    ASSERT_EQ(1u, desiredInputs.size());
+    ASSERT_EQ(1u, outputs.size());
+    EXPECT_EQ(DATA_LAYOUT_NCHW, desiredInputs[0]);
+    EXPECT_EQ(DATA_LAYOUT_UNKNOWN, outputs[0]);
 }
 
 class Layer_LSTM_Test : public ::testing::Test
@@ -2890,6 +2924,42 @@ TEST_P(Layer_Test_Resize, align_corners_downscale)
     normAssert(out2d, ref, "", 5e-5, 1e-4);
 }
 
+// Nearest only copies values, so CV_64S input must come out unchanged.
+// It used to go through CV_32F, which rounds values above 2^24.
+TEST_P(Layer_Test_Resize, nearest_int64_keeps_precision)
+{
+    int backendId = get<0>(GetParam());
+    int targetId = get<1>(GetParam());
+    if (backendId != DNN_BACKEND_OPENCV)
+        throw SkipTestException("Resize2 layer is implemented for the OpenCV backend only");
+
+    const int64_t vals[] = {16777217, 123456789012LL};
+    Mat inp(std::vector<int>{1, 1, 1, 2}, CV_64S);
+    int64_t* inpData = inp.ptr<int64_t>();
+    inpData[0] = vals[0];
+    inpData[1] = vals[1];
+
+    LayerParams lp;
+    lp.type = "Resize2";
+    lp.name = "testLayer";
+    lp.set("zoom_factor_y", 1);
+    lp.set("zoom_factor_x", 2);
+    lp.set("interpolation", "nearest");
+
+    Net net;
+    net.addLayerToPrev(lp.name, lp.type, lp);
+    net.setInput(inp);
+    net.setPreferableBackend(backendId);
+    net.setPreferableTarget(targetId);
+    Mat out = net.forward();
+
+    ASSERT_EQ(CV_64S, out.depth());
+    ASSERT_EQ(4, (int)out.total());
+    const int64_t* outData = out.ptr<int64_t>();
+    for (int i = 0; i < 4; ++i)
+        EXPECT_EQ(vals[i / 2], outData[i]) << "i=" << i;
+}
+
 INSTANTIATE_TEST_CASE_P(/**/, Layer_Test_Resize, dnnBackendsAndTargets());
 
 struct Layer_Test_Slice : public testing::TestWithParam<tuple<Backend, Target> >
@@ -4100,6 +4170,59 @@ TEST(Layer_Test_Softmax, NoNaN_AllNegInf)
         EXPECT_EQ(val, 0.f) << "Expected 0 at index " << i;
     }
 }
+
+typedef testing::TestWithParam<tuple<Backend, Target> > Layer_Test_Gemm_SquareTranspose;
+TEST_P(Layer_Test_Gemm_SquareTranspose, ReshapeBatch)
+{
+    const Backend backendId = get<0>(GetParam());
+    const Target targetId = get<1>(GetParam());
+
+    const int K = 16;
+    Mat B(K, K, CV_32F), C(std::vector<int>{K}, CV_32F);
+    randu(B, -1.f, 1.f);
+    B.at<float>(0, 1) += 1.f;
+    B.at<float>(1, 0) -= 1.f;
+    randu(C, -0.5f, 0.5f);
+    const Mat B_orig = B.clone();
+
+    LayerParams lp;
+    lp.type = "Gemm";
+    lp.name = "gemm_square_notrans";
+    lp.set("transA", false);
+    lp.set("transB", false);
+    lp.set("constB", true);
+    lp.set("constC", true);
+    lp.set("have_bias", true);
+    lp.set("real_ndims_C", 1);
+    lp.blobs.push_back(B);
+    lp.blobs.push_back(C);
+
+    Net net;
+    int id = net.addLayerToPrev(lp.name, lp.type, lp);
+    net.setPreferableBackend(backendId);
+    net.setPreferableTarget(targetId);
+
+    double l1, lInf;
+    DNNTestLayer::getDefaultThresholds(backendId, targetId, &l1, &lInf);
+
+    const int batches[] = {1, 3, 1};
+    for (size_t step = 0; step < sizeof(batches) / sizeof(batches[0]); ++step)
+    {
+        const int M = batches[step];
+        Mat A(M, K, CV_32F);
+        randu(A, -1.f, 1.f);
+
+        Mat ref = A * B_orig;
+        for (int r = 0; r < M; ++r)
+            ref.row(r) += C.reshape(1, 1);
+
+        net.setInput(A);
+        Mat out = net.forward();
+        normAssert(ref, out, format("step=%zu M=%d", step, M).c_str(), l1, lInf);
+        EXPECT_EQ(0.0, cvtest::norm(net.getParam(id, 0), B_orig, NORM_INF));
+    }
+}
+INSTANTIATE_TEST_CASE_P(/**/, Layer_Test_Gemm_SquareTranspose, dnnBackendsAndTargets());
 
 TEST(Test_Gemm, FastGemmBlockedTails)
 {
