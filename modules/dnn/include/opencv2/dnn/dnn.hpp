@@ -1579,14 +1579,14 @@ CV__DNN_INLINE_NS_BEGIN
     {
         DNN_ACT_AUTO = 0,    //!< Default. Infer from the values.
         DNN_ACT_NONE = 1,    //!< Scores are already in [0, 1].
-        DNN_ACT_SIGMOID = 2, //!< Scores are logits. Applies to split outputs only.
+        DNN_ACT_SIGMOID = 2, //!< Scores are logits. Rejected unless they are a separate output.
     };
 
     /** @brief How a detection network writes one row of its output.
      *
-     * Each field is an independent property of the export, and each defaults to inferring itself
-     * from the values. Declare only the ones you know. The output is 3D, [B, C, N] or [B, N, C],
-     * and the anchor axis must be the longer one.
+     * Each field is an independent property of the export and defaults to inferring itself: the
+     * box form from the row shape, the rest from the values. Declare only the ones you know. The
+     * output is 3D, [B, C, N] or [B, N, C], and the anchor axis must be the longer one.
      *
      * A split head gives boxes and class scores as two outputs. The 4-wide one is the boxes; if
      * both are 4 wide, as in a four-class detector, the first is the boxes and
@@ -1682,8 +1682,9 @@ CV__DNN_INLINE_NS_BEGIN
 
          /** @brief Declare how the network writes a detection row, instead of inferring it.
           *  @param[in] params Output encoding, @see DetectionOutputParams. Fields left at their
-          *  AUTO default are still inferred from the values.
+          *  AUTO default are still inferred.
           *  @note Applies to detect(), estimatePoses() and segmentInstances().
+          *  @note DNN_ACT_SIGMOID is rejected unless the scores arrive in their own output.
          */
          CV_WRAP Model& setOutputParams(const DetectionOutputParams& params);
 

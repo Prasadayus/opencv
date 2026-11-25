@@ -1203,6 +1203,11 @@ TEST_P(Test_Model, OutputFormatRejectsWrongDeclaration)
     EXPECT_THROW(detect(_tf("yolov8n.onnx", false),
                         DetectionOutputParams(DNN_BOX_AUTO, DNN_CLS_INDEX)), cv::Exception);
 
+    // Only a separate score output can carry an activation, and yolov8n fuses its scores in.
+    EXPECT_THROW(detect(_tf("yolov8n.onnx", false),
+                        DetectionOutputParams(DNN_BOX_AUTO, DNN_CLS_AUTO, DNN_COORD_AUTO,
+                                              DNN_ACT_SIGMOID)), cv::Exception);
+
     // yolo_nas_s already emits probabilities, so asking for a sigmoid must change the scores.
     const std::string nas = _tf("onnx/models/yolo_nas_s.onnx", false);
     detect(nas, DetectionOutputParams(DNN_BOX_CORNER));

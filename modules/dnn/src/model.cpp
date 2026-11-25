@@ -320,7 +320,7 @@ void Model::predict(InputArrayOfArrays frames, CV_OUT std::vector<Mat>& outs) co
 
 
 // Sizes only. getMatVector() would map every UMat of the batch to host just to read them.
-void batchFrameSizes(InputArrayOfArrays frames, std::vector<Size>& sizes)
+static void batchFrameSizes(InputArrayOfArrays frames, std::vector<Size>& sizes)
 {
     const bool batched = frames.isMatVector() || frames.isUMatVector();
     const int count = batched ? frames.size(-1).width : 1;
@@ -328,6 +328,15 @@ void batchFrameSizes(InputArrayOfArrays frames, std::vector<Size>& sizes)
     sizes.resize(count);
     for (int i = 0; i < count; i++)
         sizes[i] = batched ? frames.size(i) : frames.size();
+}
+
+// Only mergeSplitOutputs() applies an activation, so a fused head cannot honour a declared one.
+static void checkActivationReaches(const DetectionOutputParams& params, bool merged)
+{
+    if (!merged)
+        CV_Check((int)params.activation, params.activation != DNN_ACT_SIGMOID,
+                 "a declared score activation applies only to a head whose scores arrive in a "
+                 "separate output; this one carries them in the detection tensor");
 }
 
 class ClassificationModel_Impl : public Model::Impl
@@ -465,7 +474,6 @@ void ClassificationModel::classify(InputArrayOfArrays frames, std::vector<int>& 
                                    std::vector<float>& confs)
 {
     CV_Assert(impl != nullptr && impl.dynamicCast<ClassificationModel_Impl>() != nullptr);
-    CV_Assert(frames.isMatVector() || frames.isUMatVector());
     impl.dynamicCast<ClassificationModel_Impl>()->classify(frames, classIds, confs);
 }
 
@@ -720,8 +728,8 @@ void decodeRows(const AnchorFreeLayout& layout, const HeadLayout& head, int b,
             if (bestScore < confThreshold)
                 continue;
         }
-        CV_CheckLE(bestScore, 1.0f,
-                   "Anchor-free head: score above 1, the output layout was misdetected");
+        CV_CheckLE(bestScore, 1.0f, "Anchor-free head: a score is a probability, so a value "
+                   "above 1 means the layout or the score activation does not match the output");
 
         const float b0 = r[0] * sx, b1 = r[1] * sy, b2 = r[2] * sx, b3 = r[3] * sy;
         Rect box = head.cornerBox
@@ -951,21 +959,23 @@ void instancesFromSample(const Mat& proto, const AnchorFreeLayout& layout,
         // The crop must cover the same region as the box it is resized into, so map the box
         // back; clipping in blob space would keep letterbox padding the box no longer covers.
         Rect blobBox = imageRectToBlobRect(param, d.boxes[i], frameSize) & blobRect;
+        // A crop lands on the same source pixels as the whole mask only when the blob is a
+        // whole multiple of the prototype; otherwise it resamples at a different scale.
+        const bool wholeMultiple = blobSize.width % maskW == 0 && blobSize.height % maskH == 0;
         Mat instanceMask;
-        if (blobBox.width > 0 && blobBox.height > 0)
+        if (blobBox.width <= 0 || blobBox.height <= 0)
+            instanceMask = Mat::zeros(height, width, CV_32F);
+        else if (wholeMultiple)
         {
             // Bilinear interpolation reads one pixel past the crop, so protoBox carries a margin.
-            const double fx = (double)maskW / blobSize.width;
-            const double fy = (double)maskH / blobSize.height;
-            Rect protoBox(cvFloor(blobBox.x * fx) - 1, cvFloor(blobBox.y * fy) - 1, 0, 0);
-            protoBox.width = cvCeil(blobBox.br().x * fx) + 1 - protoBox.x;
-            protoBox.height = cvCeil(blobBox.br().y * fy) + 1 - protoBox.y;
+            const int kx = blobSize.width / maskW, ky = blobSize.height / maskH;
+            Rect protoBox(blobBox.x / kx - 1, blobBox.y / ky - 1, 0, 0);
+            protoBox.width = (blobBox.br().x + kx - 1) / kx + 1 - protoBox.x;
+            protoBox.height = (blobBox.br().y + ky - 1) / ky + 1 - protoBox.y;
             protoBox &= Rect(0, 0, maskW, maskH);
 
-            const int ex = cvFloor(protoBox.x / fx), ey = cvFloor(protoBox.y / fy);
-            const Size upSize(cvCeil(protoBox.br().x / fx) - ex,
-                              cvCeil(protoBox.br().y / fy) - ey);
-            const Rect sub = blobBox - Point(ex, ey);
+            const Size upSize(protoBox.width * kx, protoBox.height * ky);
+            const Rect sub = blobBox - Point(protoBox.x * kx, protoBox.y * ky);
             CV_DbgAssert(Rect(Point(0, 0), upSize).contains(sub.tl())
                          && Rect(Point(0, 0), upSize).contains(sub.br() - Point(1, 1)));
 
@@ -974,7 +984,12 @@ void instancesFromSample(const Mat& proto, const AnchorFreeLayout& layout,
             cv::resize(upscaled(sub), instanceMask, Size(width, height), 0, 0, INTER_LINEAR);
         }
         else
-            instanceMask = Mat::zeros(height, width, CV_32F);
+        {
+            Mat fullBlobMask;
+            cv::resize(sigmoidMask, fullBlobMask, blobSize, 0, 0, INTER_LINEAR);
+            cv::resize(fullBlobMask(blobBox), instanceMask, Size(width, height), 0, 0,
+                       INTER_LINEAR);
+        }
 
         Mat instanceMask8u;
         cv::compare(instanceMask, 0.5, instanceMask8u, CMP_GT);
@@ -993,6 +1008,7 @@ void posesFromOutput(const Mat& out, const std::vector<Size>& frameSizes, const 
                      std::vector<std::vector<Point3f> >& keypoints, std::vector<Rect>& boxes,
                      std::vector<float>& confidences, std::vector<int>* frameIds)
 {
+    checkActivationReaches(params, /*merged=*/false);
     AnchorFreeLayout layout = AnchorFreeLayout::from(out);
     CV_CheckEQ(layout.B, (int)frameSizes.size(),
                "estimatePoses: the net returned a different number of samples");
@@ -1027,6 +1043,7 @@ void instancesFromOutputs(const Mat& det, const Mat& proto, const std::vector<Si
                           std::vector<float>& confidences, std::vector<Rect>& boxes,
                           std::vector<int>* frameIds)
 {
+    checkActivationReaches(params, /*merged=*/false);
     AnchorFreeLayout layout = AnchorFreeLayout::from(det);
     CV_CheckEQ(layout.B, (int)frameSizes.size(),
                "segmentInstances: the net returned a different number of samples");
@@ -1053,8 +1070,6 @@ void instancesFromOutputs(const Mat& det, const Mat& proto, const std::vector<Si
     }
 }
 
-// InputArrayOfArrays is InputArray, so a single Mat reaches the batched overloads and
-// getMatVector would split it into rows.
 } // namespace
 
 KeypointsModel::KeypointsModel(const String& model, const String& config)
@@ -1352,8 +1367,10 @@ void DetectionModel::detect(InputArray frame, CV_OUT std::vector<int>& classIds,
     impl->processFrame(frame, detections);
 
     Mat merged;
-    if (mergeSplitOutputs(detections, merged, impl->outputParams.activation))
+    const bool joined = mergeSplitOutputs(detections, merged, impl->outputParams.activation);
+    if (joined)
         detections.assign(1, merged);
+    checkActivationReaches(impl->outputParams, joined);
 
     boxes.clear();
     confidences.clear();
@@ -1506,7 +1523,7 @@ void DetectionModel::detect(InputArray frame, CV_OUT std::vector<int>& classIds,
             confidences = std::move(predConfidences);
         }
     }
-    else if (detections.size() == 1 && detections[0].dims == 3 && detections[0].size[0] == 1)
+    else if (detections.size() == 1 && detections[0].dims == 3)
     {
         const Mat& out = detections[0];
         AnchorFreeLayout layout = AnchorFreeLayout::from(out);
@@ -1543,8 +1560,10 @@ void DetectionModel::detect(InputArrayOfArrays frames,
     impl->processFrame(frames, detections);
 
     Mat merged;
-    if (mergeSplitOutputs(detections, merged, impl->outputParams.activation))
+    const bool joined = mergeSplitOutputs(detections, merged, impl->outputParams.activation);
+    if (joined)
         detections.assign(1, merged);
+    checkActivationReaches(impl->outputParams, joined);
 
     CV_Check((int)detections.size(), detections.size() == 1 && detections[0].dims == 3,
              "batched detect requires a single 3D anchor-free output");
